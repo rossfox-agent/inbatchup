@@ -3,27 +3,45 @@
 Batch uploader for IRIDA Next via GraphQL API.
 
 Uploads sequencing files (FASTQ etc.) to samples in IRIDA Next projects.
-Supports paired-end reads, bulk sample creation, and file attachment.
+Supports paired-end reads, bulk sample creation, file attachment, and
+sample metadata via CSV/TSV files.
 
 Auth: HTTP Basic Auth with email + personal access token.
 
 Usage:
-    python irida_batch_uploader.py \
-        --url https://irida.example.com \
-        --email user@example.com \
-        --token INXT_PAT_xxxxx \
-        --project-puid INXT_PRJ_AAAAAAAAAA \
-        --samplesheet samples.tsv \
+    python irida_batch_uploader.py \\
+        --url https://irida.example.com \\
+        --email user@example.com \\
+        --token INXT_PAT_xxxxx \\
+        --project-puid INXT_PRJ_AAAAAAAAAA \\
+        --samplesheet samples.tsv \\
+        --input-dir /data/runs/run001
+
+    # With metadata (CSV/TSV with named columns):
+    python irida_batch_uploader.py \\
+        --url https://irida.example.com \\
+        --email user@example.com \\
+        --token INXT_PAT_xxxxx \\
+        --project-puid INXT_PRJ_AAAAAAAAAA \\
+        --metadata-file samples_with_metadata.csv \\
+        --sample-column sample_name \\
+        --file-columns forward_read reverse_read \\
         --input-dir /data/runs/run001
 
 Samplesheet format (TSV):
     sample_name    file1    file2
     sample1        sample1_R1.fastq.gz    sample1_R2.fastq.gz
-    sample2        sample2_R1.fastq.gz    sample2_R2.fastq.gz
 
-Or single-end:
-    sample_name    file1
-    sample3        sample3.fastq.gz
+Metadata file format (CSV or TSV):
+    Any columns work. Specify which column is the sample name
+    (--sample-column) and which columns are file paths (--file-columns).
+    All remaining columns are treated as sample metadata and applied
+    via the updateSampleMetadata GraphQL mutation.
+
+    Example CSV:
+        sample_name,forward_read,reverse_read,organism,isolate_id
+        sample1,s1_R1.fastq.gz,s1_R2.fastq.gz,Salmonella,ST-001
+        sample2,s2_R1.fastq.gz,s2_R2.fastq.gz,E. coli,ST-002
 
 Can also auto-discover paired-end files by --auto-discover flag:
     sample1_R1.fastq.gz + sample1_R2.fastq.gz → sample "sample1"
@@ -31,6 +49,7 @@ Can also auto-discover paired-end files by --auto-discover flag:
 
 import argparse
 import base64
+import csv
 import hashlib
 import json
 import os
@@ -259,6 +278,39 @@ class IRIDANextClient:
         data = self.execute_graphql(query, variables)
         return data.get("project", {})
 
+    def update_sample_metadata(self, metadata: dict, sample_id: str = None,
+                              sample_puid: str = None) -> dict:
+        """Update metadata for a sample via updateSampleMetadata mutation."""
+        mutation = """
+        mutation UpdateSampleMetadata($metadata: JSON!, $sampleId: ID, $samplePuid: ID) {
+            updateSampleMetadata(input: {
+                metadata: $metadata,
+                sampleId: $sampleId,
+                samplePuid: $samplePuid
+            }) {
+                sample {
+                    id
+                    puid
+                }
+                status
+                errors {
+                    path
+                    message
+                }
+            }
+        }
+        """
+        variables = {"metadata": metadata}
+        if sample_id:
+            variables["sampleId"] = sample_id
+        if sample_puid:
+            variables["samplePuid"] = sample_puid
+        data = self.execute_graphql(mutation, variables)
+        result = data.get("updateSampleMetadata", {})
+        if result.get("errors"):
+            raise RuntimeError(f"Metadata update errors: {result['errors']}")
+        return result
+
     @staticmethod
     def _compute_md5_base64(file_path: Path) -> str:
         """Compute MD5 checksum and return as base64-encoded string."""
@@ -285,6 +337,80 @@ def parse_samplesheet(filepath: str) -> list:
             sample_name = cols[0]
             files = [c for c in cols[1:] if c]
             samples.append((sample_name, files))
+    return samples
+
+
+def parse_metadata_file(filepath: str, sample_column: str, file_columns: list) -> list:
+    """
+    Parse a CSV/TSV file containing sample names, file paths, and metadata.
+
+    Args:
+        filepath: Path to the CSV or TSV file.
+        sample_column: Name of the column containing the sample name.
+        file_columns: List of column names containing file paths.
+
+    Returns:
+        List of (sample_name, [file_paths], {metadata_key: value, ...}).
+        All columns except sample_column and file_columns are treated as metadata.
+    """
+    # Detect delimiter: TSV if .tsv/.tab, CSV if .csv, otherwise sniff
+    ext = Path(filepath).suffix.lower()
+    if ext in (".tsv", ".tab"):
+        delimiter = "\t"
+    elif ext == ".csv":
+        delimiter = ","
+    else:
+        # Sniff delimiter from first non-empty line
+        with open(filepath, "r") as f:
+            first_line = f.readline()
+        delimiter = "\t" if "\t" in first_line else ","
+
+    samples = []
+    with open(filepath, "r", newline="") as f:
+        reader = csv.DictReader(f, delimiter=delimiter)
+        if not reader.fieldnames:
+            raise ValueError(f"No header row found in {filepath}")
+
+        if sample_column not in reader.fieldnames:
+            raise ValueError(
+                f"Sample column '{sample_column}' not found in header. "
+                f"Available columns: {', '.join(reader.fieldnames)}"
+            )
+
+        for col in file_columns:
+            if col not in reader.fieldnames:
+                raise ValueError(
+                    f"File column '{col}' not found in header. "
+                    f"Available columns: {', '.join(reader.fieldnames)}"
+                )
+
+        # Metadata columns = everything except sample_column and file_columns
+        metadata_columns = [
+            c for c in reader.fieldnames
+            if c != sample_column and c not in file_columns
+        ]
+
+        for row in reader:
+            sample_name = row[sample_column].strip()
+            if not sample_name:
+                continue
+
+            # Collect file paths (skip empty)
+            files = []
+            for fc in file_columns:
+                val = row.get(fc, "").strip()
+                if val:
+                    files.append(val)
+
+            # Collect metadata (skip empty values)
+            metadata = {}
+            for mc in metadata_columns:
+                val = row.get(mc, "").strip()
+                if val:
+                    metadata[mc] = val
+
+            samples.append((sample_name, files, metadata))
+
     return samples
 
 
@@ -329,8 +455,8 @@ def auto_discover_samples(input_dir: Path) -> list:
 
 def upload_sample(client: IRIDANextClient, sample_name: str, file_paths: list,
                   input_dir: Path, project_id: str = None, project_puid: str = None,
-                  description: str = None) -> UploadResult:
-    """Upload a single sample: create sample → upload files → attach."""
+                  description: str = None, metadata: dict = None) -> UploadResult:
+    """Upload a single sample: create sample → upload files → attach → update metadata."""
     result = UploadResult(sample_name=sample_name, success=False)
 
     try:
@@ -369,8 +495,19 @@ def upload_sample(client: IRIDANextClient, sample_name: str, file_paths: list,
             sample_puid=sample_puid,
         )
 
+        # 4. Update metadata if provided
+        if metadata:
+            client.update_sample_metadata(
+                metadata=metadata,
+                sample_id=sample_id,
+                sample_puid=sample_puid,
+            )
+
         result.success = True
-        result.message = f"Uploaded {len(signed_blob_ids)} file(s)"
+        msg = f"Uploaded {len(signed_blob_ids)} file(s)"
+        if metadata:
+            msg += f", metadata: {len(metadata)} field(s)"
+        result.message = msg
     except Exception as e:
         result.message = str(e)
     return result
@@ -385,6 +522,12 @@ Examples:
   # Upload from samplesheet
   %(prog)s --url https://irida.example.com --email me@lab.ca --token INXT_PAT_xxx \\
       --project-puid INXT_PRJ_AAAAAAAAAA --samplesheet samples.tsv --input-dir /data/run001
+
+  # Upload with metadata from CSV
+  %(prog)s --url https://irida.example.com --email me@lab.ca --token INXT_PAT_xxx \\
+      --project-puid INXT_PRJ_AAAAAAAAAA --metadata-file samples.csv \\
+      --sample-column sample_name --file-columns fwd_read rev_read \\
+      --input-dir /data/run001
 
   # Auto-discover paired-end files
   %(prog)s --url https://irida.example.com --email me@lab.ca --token INXT_PAT_xxx \\
@@ -401,6 +544,13 @@ Examples:
     parser.add_argument("--project-id", help="Project GraphQL Node ID (gid://irida/Project/...)")
     parser.add_argument("--project-puid", help="Project PUID (INXT_PRJ_...)")
     parser.add_argument("--samplesheet", help="TSV samplesheet: sample_name<TAB>file1[<TAB>file2]")
+    parser.add_argument("--metadata-file",
+                        help="CSV or TSV file with sample names, file paths, and metadata columns")
+    parser.add_argument("--sample-column", default="sample_name",
+                        help="Column name in --metadata-file for the sample name (default: sample_name)")
+    parser.add_argument("--file-columns", nargs="+", default=["file1", "file2"],
+                        help="Column name(s) in --metadata-file for file paths (default: file1 file2). "
+                             "All other columns become sample metadata.")
     parser.add_argument("--input-dir", default=".", help="Base directory for file paths in samplesheet")
     parser.add_argument("--auto-discover", action="store_true",
                         help="Auto-discover paired-end FASTQ files in --input-dir")
@@ -417,8 +567,8 @@ Examples:
     if not args.project_id and not args.project_puid:
         parser.error("Either --project-id or --project-puid is required")
 
-    if not args.samplesheet and not args.auto_discover and not args.attach_to_project:
-        parser.error("Either --samplesheet, --auto-discover, or --attach-to-project is required")
+    if not args.samplesheet and not args.auto_discover and not args.attach_to_project and not args.metadata_file:
+        parser.error("Either --samplesheet, --metadata-file, --auto-discover, or --attach-to-project is required")
 
     verify_ssl = not args.no_verify_ssl
     client = IRIDANextClient(args.url, args.email, args.token, verify_ssl)
@@ -434,6 +584,7 @@ Examples:
     input_dir = Path(args.input_dir)
 
     # Build upload list
+    metadata_map = {}  # sample_name → metadata dict
     if args.attach_to_project:
         # Upload all files in input_dir to the project
         files = sorted(list(input_dir.glob("*.gz")) + list(input_dir.glob("*.fastq")))
@@ -441,6 +592,12 @@ Examples:
             print(f"ERROR: No files found in {input_dir}")
             sys.exit(1)
         upload_list = [(f.name, [str(f)]) for f in files]
+    elif args.metadata_file:
+        # Parse metadata file: returns [(sample_name, [files], {metadata})]
+        parsed = parse_metadata_file(args.metadata_file, args.sample_column, args.file_columns)
+        upload_list = [(name, files) for name, files, meta in parsed]
+        for name, files, meta in parsed:
+            metadata_map[name] = meta
     elif args.auto_discover:
         upload_list = auto_discover_samples(input_dir)
     else:
@@ -452,7 +609,9 @@ Examples:
 
     print(f"\nFound {len(upload_list)} sample(s) to upload:")
     for name, files in upload_list:
-        print(f"  {name}: {', '.join(Path(f).name for f in files)}")
+        meta = metadata_map.get(name, {})
+        meta_str = f" [metadata: {', '.join(f'{k}={v}' for k,v in meta.items())}]" if meta else ""
+        print(f"  {name}: {', '.join(Path(f).name for f in files)}{meta_str}")
 
     if args.dry_run:
         print("\n--dry-run: no uploads performed.")
@@ -467,11 +626,12 @@ Examples:
             futures = {}
             for sample_name, file_paths in upload_list:
                 if args.attach_to_project:
-                    # Will be handled separately below
                     continue
+                meta = metadata_map.get(sample_name, {})
                 fut = pool.submit(
                     upload_sample, client, sample_name, file_paths,
                     input_dir, args.project_id, args.project_puid, args.description,
+                    meta if meta else None,
                 )
                 futures[fut] = sample_name
             for fut in as_completed(futures):
@@ -483,9 +643,11 @@ Examples:
         for sample_name, file_paths in upload_list:
             if args.attach_to_project:
                 continue
+            meta = metadata_map.get(sample_name, {})
             r = upload_sample(
                 client, sample_name, file_paths, input_dir,
                 args.project_id, args.project_puid, args.description,
+                meta if meta else None,
             )
             results.append(r)
             status = "✓" if r.success else "✗"
