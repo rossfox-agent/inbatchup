@@ -28,7 +28,7 @@ IRIDA_PROJECT_PUID="${IRIDA_PROJECT_PUID:-INXT_PRJ_AAAAAAAAAA}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
-UPLOADER="$PARENT_DIR/irida_batch_uploader.py"
+UPLOADER="$PARENT_DIR/inbatchup.py"
 DATA_DIR="$SCRIPT_DIR/data"
 
 echo "═══════════════════════════════════════════════════════════════"

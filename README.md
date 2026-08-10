@@ -1,4 +1,4 @@
-# IRIDA Next Batch Uploader
+# InBatchUp
 
 A Python CLI tool for batch-uploading sequencing files to [IRIDA Next](https://github.com/phac-nml/irida-next) via its GraphQL API.
 
@@ -42,7 +42,7 @@ Authentication uses **HTTP Basic Auth** with your email as the username and a **
 ### From PyPI (Forgejo registry)
 
 ```bash
-pip install irida-next-batch-uploader \
+pip install inbatchup \
   --index-url https://git.rossfox.xyz/api/packages/ross/pypi/simple
 ```
 
@@ -56,27 +56,27 @@ extra-index-url = https://git.rossfox.xyz/api/packages/ross/pypi/simple
 Then:
 
 ```bash
-pip install irida-next-batch-uploader
+pip install inbatchup
 ```
 
 ### From Conda (Forgejo registry)
 
 ```bash
 conda config --add channels https://git.rossfox.xyz/api/packages/ross/conda
-conda install irida-next-batch-uploader
+conda install inbatchup
 ```
 
 Or specify the channel directly:
 
 ```bash
-conda install -c https://git.rossfox.xyz/api/packages/ross/conda irida-next-batch-uploader
+conda install -c https://git.rossfox.xyz/api/packages/ross/conda inbatchup
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/rossfox-agent/irida-next-batch-uploader.git
-cd irida-next-batch-uploader
+git clone https://github.com/rossfox-agent/inbatchup.git
+cd inbatchup
 pip install .
 ```
 
@@ -105,7 +105,7 @@ sample3	sample3.fastq.gz
 - Paired-end: 2 file columns; single-end: 1 file column
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -128,7 +128,7 @@ sample3,s3.fastq.gz,,Listeria monocytogenes,ST-003,4b,2024-02-01
 ```
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -150,7 +150,7 @@ python irida_batch_uploader.py \
 If your directory contains `*_R1.fastq.gz` / `*_R2.fastq.gz` (or `*_1.fastq.gz` / `*_2.fastq.gz`) pairs:
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -166,7 +166,7 @@ Files are auto-paired by name prefix. Non-paired files become single-end samples
 No sample creation — just attach files to the project namespace (for reports, reference genomes, etc.):
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -180,7 +180,7 @@ python irida_batch_uploader.py \
 Upload multiple samples concurrently:
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -195,7 +195,7 @@ python irida_batch_uploader.py \
 Preview what would be uploaded without making any changes:
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -274,8 +274,8 @@ Tests cover:
 ## Project Structure
 
 ```
-irida-next-batch-uploader/
-├── irida_batch_uploader.py   # Main CLI tool
+inbatchup/
+├── inbatchup.py   # Main CLI tool
 ├── tests/
 │   └── test_uploader.py      # Unit tests (46 tests)
 ├── examples/                 # End-to-end examples
