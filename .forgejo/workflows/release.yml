@@ -81,7 +81,6 @@ jobs:
 
   conda:
     runs-on: ubuntu-latest
-    container: condaforge/mambaforge:latest
     needs: release
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
 
@@ -89,13 +88,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install conda-build
+      - name: Install miniconda and build conda package
         run: |
-          mamba install -y conda-build
-
-      - name: Build conda package
-        run: |
+          # Install miniconda alongside system Python
+          curl -sL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o /tmp/miniconda.sh
+          bash /tmp/miniconda.sh -b -p /opt/conda
+          export PATH="/opt/conda/bin:$PATH"
+          conda --version
+          # Install conda-build
+          conda install -y conda-build
+          # Build the conda package
           conda build conda-recipe/ --output-folder dist-conda --no-anaconda-upload
+          echo "Conda build complete"
           ls -la dist-conda/noarch/
 
       - name: Publish to Forgejo Conda Registry
