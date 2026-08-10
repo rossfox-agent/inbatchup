@@ -16,9 +16,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install dependencies
+      - name: Install pip and dependencies
         run: |
           python3 --version
+          apt-get update && apt-get install -y python3-pip
           python3 -m pip install --upgrade pip
           python3 -m pip install requests pytest build twine python-semantic-release
 
