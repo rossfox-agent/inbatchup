@@ -14,21 +14,27 @@ Authentication uses **HTTP Basic Auth** with your email as the username and a **
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Samplesheet │     │  createSample    │     │  createDirect   │
-│  or Auto-    │────▶│  (GraphQL)       │────▶│  Upload (GraphQL)│
-│  discover    │     │  → sample.puid   │     │  → url, blob_id │
-└─────────────┘     └──────────────────┘     └────────┬────────┘
-                                                       │
-                                              ┌────────▼────────┐
-                                              │  PUT binary to  │
-                                              │  signed URL     │
-                                              └────────┬────────┘
-                                                       │
-                                              ┌────────▼────────┐
-                                              │  attachFiles    │
-                                              │  ToSample       │
-                                              │  (GraphQL)       │
-                                              └─────────────────┘
+│  Samplesheet  │     │  createSample    │     │  createDirect   │
+│  Metadata CSV │────▶│  (GraphQL)       │────▶│  Upload (GraphQL)│
+│  or Auto-     │     │  → sample.puid   │     │  → url, blob_id │
+│  discover     │     └──────────────────┘     └────────┬────────┘
+└─────────────┘                                         │
+                                                ┌────────▼────────┐
+                                                │  PUT binary to  │
+                                                │  signed URL     │
+                                                └────────┬────────┘
+                                                         │
+                                                ┌────────▼────────┐
+                                                │  attachFiles     │
+                                                │  ToSample        │
+                                                │  (GraphQL)        │
+                                                └────────┬────────┘
+                                                         │
+                                                ┌────────▼────────┐
+                                                │  updateSample   │
+                                                │  Metadata       │
+                                                │  (GraphQL)       │
+                                                └─────────────────┘
 ```
 
 ## Prerequisites
@@ -69,7 +75,38 @@ python irida_batch_uploader.py \
     --input-dir /data/runs/run001
 ```
 
-### Option 2: Auto-discover paired-end files
+### Option 2: Metadata file (CSV/TSV with named columns)
+
+Upload files and apply sample metadata in one pass. Any CSV or TSV file works — you specify which column is the sample name and which columns contain file paths. All remaining columns become sample metadata applied via the `updateSampleMetadata` GraphQL mutation.
+
+Example CSV (`samples_with_metadata.csv`):
+
+```csv
+sample_name,forward_read,reverse_read,organism,isolate_id,serotype,collection_date
+sample1,s1_R1.fastq.gz,s1_R2.fastq.gz,Salmonella enterica,ST-001,Enteritidis,2024-01-15
+sample2,s2_R1.fastq.gz,s2_R2.fastq.gz,Escherichia coli,ST-002,O157:H7,2024-01-20
+sample3,s3.fastq.gz,,Listeria monocytogenes,ST-003,4b,2024-02-01
+```
+
+```bash
+python irida_batch_uploader.py \
+    --url https://irida.yourlab.ca \
+    --email you@lab.ca \
+    --token INXT_PAT_xxxxx \
+    --project-puid INXT_PRJ_AAAAAAAAAA \
+    --metadata-file samples_with_metadata.csv \
+    --sample-column sample_name \
+    --file-columns forward_read reverse_read \
+    --input-dir /data/runs/run001
+```
+
+- `--sample-column`: which column holds the sample name (default: `sample_name`)
+- `--file-columns`: which columns hold file paths (default: `file1 file2`)
+- All other columns → sample metadata via `updateSampleMetadata`
+- Empty file/metadata values are skipped
+- Delimiter auto-detected from file extension (`.csv` → comma, `.tsv` → tab)
+
+### Option 3: Auto-discover paired-end files
 
 If your directory contains `*_R1.fastq.gz` / `*_R2.fastq.gz` (or `*_1.fastq.gz` / `*_2.fastq.gz`) pairs:
 
@@ -85,7 +122,7 @@ python irida_batch_uploader.py \
 
 Files are auto-paired by name prefix. Non-paired files become single-end samples.
 
-### Option 3: Attach files directly to a project
+### Option 4: Attach files directly to a project
 
 No sample creation — just attach files to the project namespace (for reports, reference genomes, etc.):
 
@@ -139,6 +176,9 @@ python irida_batch_uploader.py \
 | `--project-id` | one of | Project GraphQL Node ID (`gid://irida/Project/...`) |
 | `--project-puid` | one of | Project PUID (`INXT_PRJ_...`) |
 | `--samplesheet` | one of | TSV file: `sample_name<TAB>file1[<TAB>file2]` |
+| `--metadata-file` | one of | CSV or TSV file with sample names, file paths, and metadata columns |
+| `--sample-column` | | Column name in `--metadata-file` for the sample name (default: `sample_name`) |
+| `--file-columns` | | Column name(s) in `--metadata-file` for file paths (default: `file1 file2`). All other columns become sample metadata. |
 | `--auto-discover` | one of | Auto-discover paired-end FASTQ files in `--input-dir` |
 | `--attach-to-project` | one of | Attach files to project instead of creating samples |
 | `--input-dir` | | Base directory for resolving file paths (default: `.`) |
@@ -165,6 +205,7 @@ For each sample in the upload list:
       → { url, headers, blobId, signedBlobId }
    c. PUT file binary → url with headers
 3. attachFilesToSample(files=[signedBlobId, ...], samplePuid) → status
+4. updateSampleMetadata(metadata={key: value, ...}, samplePuid) → status
 ```
 
 ## Testing
@@ -197,8 +238,9 @@ Tests cover:
 irida-next-batch-uploader/
 ├── irida_batch_uploader.py   # Main CLI tool
 ├── tests/
-│   └── test_uploader.py      # Unit tests
-├── example_samplesheet.tsv   # Example TSV input
+│   └── test_uploader.py      # Unit tests (45 tests)
+├── example_samplesheet.tsv   # Example TSV samplesheet
+├── example_metadata.csv      # Example CSV with metadata columns
 ├── pytest.ini                # Pytest configuration
 ├── CHANGELOG.md              # Version history
 └── README.md                 # This file
