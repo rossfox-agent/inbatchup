@@ -1,5 +1,5 @@
 """
-Unit tests for irida_batch_uploader.py
+Unit tests for inbatchup.py
 
 Tests cover:
 - MD5 base64 checksum computation
@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
-import irida_batch_uploader as u
+import inbatchup as u
 
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -555,7 +555,7 @@ class TestDirectUpload:
         assert du["headers"] == {"Content-Type": "application/octet-stream"}
 
     @patch.object(u.IRIDANextClient, "execute_graphql")
-    @patch("irida_batch_uploader.requests.put")
+    @patch("inbatchup.requests.put")
     def test_upload_file_full_flow(self, mock_put, mock_gql, client, sample_fastq):
         """Full upload_file returns signed_blob_id after PUT."""
         mock_gql.return_value = {
@@ -575,7 +575,7 @@ class TestDirectUpload:
         mock_put.assert_called_once()
 
     @patch.object(u.IRIDANextClient, "execute_graphql")
-    @patch("irida_batch_uploader.requests.put")
+    @patch("inbatchup.requests.put")
     def test_upload_file_put_fails(self, mock_put, mock_gql, client, sample_fastq):
         """PUT failure raises RuntimeError."""
         mock_gql.return_value = {

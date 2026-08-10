@@ -1,5 +1,5 @@
-{% set name = "irida-next-batch-uploader" %}
-{% set version = "0.5.6" %}
+{% set name = "inbatchup" %}
+{% set version = "0.6.4" %}
 
 package:
   name: {{ name|lower }}
@@ -13,7 +13,7 @@ build:
   number: 0
   script: {{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
   entry_points:
-    - irida-batch-upload = irida_batch_uploader:main
+    - inbatchup = inbatchup:main
 
 requirements:
   host:
@@ -26,12 +26,12 @@ requirements:
 
 test:
   imports:
-    - irida_batch_uploader
+    - inbatchup
   commands:
-    - irida-batch-upload --help
+    - inbatchup --help
 
 about:
-  home: https://github.com/rossfox-agent/irida-next-batch-uploader
+  home: https://github.com/rossfox-agent/inbatchup
   license: MIT
   license_file: LICENSE
   summary: "Batch uploader for IRIDA Next via GraphQL API"
@@ -39,7 +39,7 @@ about:
     Uploads sequencing files (FASTQ etc.) to samples in IRIDA Next projects.
     Supports paired-end reads, bulk sample creation, file attachment, and
     sample metadata via CSV/TSV files.
-  dev_url: https://github.com/rossfox-agent/irida-next-batch-uploader
+  dev_url: https://github.com/rossfox-agent/inbatchup
 
 extra:
   recipe-maintainers:

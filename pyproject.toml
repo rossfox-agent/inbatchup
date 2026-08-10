@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "irida-next-batch-uploader"
-version = "0.4.0"
+name = "inbatchup"
+version = "0.6.4"
 description = "Batch uploader for IRIDA Next via GraphQL API"
 readme = "README.md"
 license = {text = "MIT"}
@@ -32,13 +32,13 @@ test = ["pytest>=7.0"]
 dev = ["pytest>=7.0", "build", "twine"]
 
 [project.scripts]
-irida-batch-upload = "irida_batch_uploader:main"
+inbatchup = "inbatchup:main"
 
 [tool.setuptools]
-py-modules = ["irida_batch_uploader"]
+py-modules = ["inbatchup"]
 
 [tool.semantic_release]
-version_variable = ["pyproject.toml:version", "irida_batch_uploader.py:__version__"]
+version_variable = ["pyproject.toml:version", "inbatchup.py:__version__"]
 version_toml = ["pyproject.toml:project.version"]
 tag_format = "v{version}"
 commit_parser = "angular"

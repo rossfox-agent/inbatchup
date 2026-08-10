@@ -24,7 +24,7 @@ jobs:
 
       - name: Lint (syntax check)
         run: |
-          python3 -m py_compile irida_batch_uploader.py
+          python3 -m py_compile inbatchup.py
           echo "Syntax OK"
 
       - name: Run unit tests
@@ -39,6 +39,6 @@ jobs:
       - name: Verify built package imports
         run: |
           python3 -m pip install --break-system-packages dist/*.whl
-          python3 -c "import irida_batch_uploader; print('Package import OK')"
-          irida-batch-upload --help | head -5
-          python3 -m pip uninstall --break-system-packages -y irida-next-batch-uploader
+          python3 -c "import inbatchup; print('Package import OK')"
+          inbatchup --help | head -5
+          python3 -m pip uninstall --break-system-packages -y inbatchup
