@@ -5,9 +5,10 @@ Tests cover:
 - MD5 base64 checksum computation
 - Auto-discover paired-end file detection
 - Samplesheet TSV parsing
+- Metadata file (CSV/TSV) parsing with sample + file columns
 - Client initialization and auth header
 - GraphQL query construction (mocked)
-- Upload flow (mocked HTTP)
+- Upload flow with metadata (mocked HTTP)
 """
 
 import base64
@@ -199,6 +200,216 @@ class TestParseSamplesheet:
         result = u.parse_samplesheet(str(sheet))
         assert len(result) == 1
         assert result[0] == ("lonely", [])
+
+
+# ─── Metadata File Parsing Tests ──────────────────────────────────────────
+
+class TestParseMetadataFile:
+    def test_csv_with_metadata(self, tmp_dir):
+        """CSV file with sample name, file columns, and metadata columns."""
+        f = tmp_dir / "samples.csv"
+        f.write_text(
+            "sample_name,forward_read,reverse_read,organism,isolate_id\n"
+            "s1,s1_R1.fastq.gz,s1_R2.fastq.gz,Salmonella,ST-001\n"
+            "s2,s2_R1.fastq.gz,s2_R2.fastq.gz,E. coli,ST-002\n"
+        )
+        result = u.parse_metadata_file(str(f), "sample_name", ["forward_read", "reverse_read"])
+        assert len(result) == 2
+        # First sample
+        assert result[0][0] == "s1"
+        assert result[0][1] == ["s1_R1.fastq.gz", "s1_R2.fastq.gz"]
+        assert result[0][2] == {"organism": "Salmonella", "isolate_id": "ST-001"}
+        # Second sample
+        assert result[1][0] == "s2"
+        assert result[1][2] == {"organism": "E. coli", "isolate_id": "ST-002"}
+
+    def test_tsv_with_metadata(self, tmp_dir):
+        """TSV file with metadata."""
+        f = tmp_dir / "samples.tsv"
+        f.write_text(
+            "sample_name\tfile1\tfile2\torganism\n"
+            "s1\ts1_R1.fq.gz\ts1_R2.fq.gz\tSalmonella\n"
+        )
+        result = u.parse_metadata_file(str(f), "sample_name", ["file1", "file2"])
+        assert len(result) == 1
+        assert result[0][2] == {"organism": "Salmonella"}
+
+    def test_single_end_with_metadata(self, tmp_dir):
+        """Single file column with metadata."""
+        f = tmp_dir / "samples.csv"
+        f.write_text(
+            "sample_name,fastq,organism,collection_date\n"
+            "solo,solo.fastq.gz,Listeria,2024-01-15\n"
+        )
+        result = u.parse_metadata_file(str(f), "sample_name", ["fastq"])
+        assert len(result) == 1
+        assert result[0][1] == ["solo.fastq.gz"]
+        assert result[0][2] == {"organism": "Listeria", "collection_date": "2024-01-15"}
+
+    def test_custom_column_names(self, tmp_dir):
+        """Non-default column names for sample and files."""
+        f = tmp_dir / "samples.csv"
+        f.write_text(
+            "id,fwd,rev,species\n"
+            "sx,sx_R1.fastq.gz,sx_R2.fastq.gz,Campylobacter\n"
+        )
+        result = u.parse_metadata_file(str(f), "id", ["fwd", "rev"])
+        assert len(result) == 1
+        assert result[0][0] == "sx"
+        assert result[0][2] == {"species": "Campylobacter"}
+
+    def test_empty_metadata_values_skipped(self, tmp_dir):
+        """Empty metadata values should be omitted, not included as empty strings."""
+        f = tmp_dir / "samples.csv"
+        f.write_text(
+            "sample_name,file1,organism,serotype\n"
+            "s1,s1.fastq.gz,Salmonella,\n"
+        )
+        result = u.parse_metadata_file(str(f), "sample_name", ["file1"])
+        assert len(result) == 1
+        assert "organism" in result[0][2]
+        assert "serotype" not in result[0][2]
+
+    def test_no_metadata_columns(self, tmp_dir):
+        """All columns are sample name or file columns — no metadata."""
+        f = tmp_dir / "samples.csv"
+        f.write_text(
+            "sample_name,file1,file2\n"
+            "s1,s1_R1.fastq.gz,s1_R2.fastq.gz\n"
+        )
+        result = u.parse_metadata_file(str(f), "sample_name", ["file1", "file2"])
+        assert len(result) == 1
+        assert result[0][2] == {}
+
+    def test_empty_file_column_values_skipped(self, tmp_dir):
+        """Empty file column values should be skipped, not included."""
+        f = tmp_dir / "samples.csv"
+        f.write_text(
+            "sample_name,file1,file2,organism\n"
+            "s1,s1.fastq.gz,,Salmonella\n"
+        )
+        result = u.parse_metadata_file(str(f), "sample_name", ["file1", "file2"])
+        assert len(result) == 1
+        assert result[0][1] == ["s1.fastq.gz"]  # only one file, second was empty
+        assert result[0][2] == {"organism": "Salmonella"}
+
+    def test_blank_sample_name_skipped(self, tmp_dir):
+        """Rows with empty sample name should be skipped."""
+        f = tmp_dir / "samples.csv"
+        f.write_text(
+            "sample_name,file1,organism\n"
+            "s1,s1.fastq.gz,Salmonella\n"
+            ",empty.fastq.gz,Skipped\n"
+            "s2,s2.fastq.gz,E. coli\n"
+        )
+        result = u.parse_metadata_file(str(f), "sample_name", ["file1"])
+        assert len(result) == 2
+        names = [r[0] for r in result]
+        assert "s1" in names
+        assert "s2" in names
+
+    def test_invalid_sample_column(self, tmp_dir):
+        """Should raise ValueError if sample column doesn't exist."""
+        f = tmp_dir / "samples.csv"
+        f.write_text("sample_name,file1\ns1,s1.fastq.gz\n")
+        with pytest.raises(ValueError, match="Sample column 'nonexistent' not found"):
+            u.parse_metadata_file(str(f), "nonexistent", ["file1"])
+
+    def test_invalid_file_column(self, tmp_dir):
+        """Should raise ValueError if file column doesn't exist."""
+        f = tmp_dir / "samples.csv"
+        f.write_text("sample_name,file1\ns1,s1.fastq.gz\n")
+        with pytest.raises(ValueError, match="File column 'nonexistent' not found"):
+            u.parse_metadata_file(str(f), "sample_name", ["nonexistent"])
+
+    def test_delimiter_auto_detection_tsv(self, tmp_dir):
+        """Should auto-detect TSV from .tsv extension."""
+        f = tmp_dir / "samples.tsv"
+        f.write_text(
+            "sample_name\tfile1\torganism\n"
+            "s1\ts1.fastq.gz\tSalmonella\n"
+        )
+        result = u.parse_metadata_file(str(f), "sample_name", ["file1"])
+        assert len(result) == 1
+        assert result[0][2] == {"organism": "Salmonella"}
+
+
+# ─── Metadata Upload Tests (Mocked) ────────────────────────────────────────
+
+class TestMetadataUpload:
+    @patch.object(u.IRIDANextClient, "upload_file")
+    @patch.object(u.IRIDANextClient, "create_sample")
+    @patch.object(u.IRIDANextClient, "attach_files_to_sample")
+    @patch.object(u.IRIDANextClient, "update_sample_metadata")
+    def test_upload_sample_with_metadata(self, mock_meta, mock_attach, mock_create, mock_upload, client, tmp_dir):
+        """upload_sample applies metadata after files are uploaded."""
+        mock_create.return_value = {"id": "gid://irida/Sample/1", "puid": "INXT_SAM_ABC"}
+        mock_upload.return_value = "signed-blob-1"
+
+        f = tmp_dir / "test.fastq.gz"
+        f.write_bytes(b"data")
+
+        metadata = {"organism": "Salmonella", "isolate_id": "ST-001"}
+        result = u.upload_sample(
+            client, "sample1", [str(f)], tmp_dir,
+            project_puid="INXT_PRJ_TEST", metadata=metadata,
+        )
+
+        assert result.success
+        assert "metadata: 2 field(s)" in result.message
+        mock_meta.assert_called_once()
+        call_kwargs = mock_meta.call_args
+        assert call_kwargs[1]["metadata"] == metadata or call_kwargs[0][0] == metadata
+
+    @patch.object(u.IRIDANextClient, "upload_file")
+    @patch.object(u.IRIDANextClient, "create_sample")
+    @patch.object(u.IRIDANextClient, "attach_files_to_sample")
+    @patch.object(u.IRIDANextClient, "update_sample_metadata")
+    def test_upload_sample_no_metadata(self, mock_meta, mock_attach, mock_create, mock_upload, client, tmp_dir):
+        """upload_sample without metadata should not call update_sample_metadata."""
+        mock_create.return_value = {"id": "gid://irida/Sample/1", "puid": "INXT_SAM_X"}
+        mock_upload.return_value = "signed-blob-1"
+
+        f = tmp_dir / "test.fastq.gz"
+        f.write_bytes(b"data")
+
+        result = u.upload_sample(
+            client, "sample1", [str(f)], tmp_dir,
+            project_puid="INXT_PRJ_TEST", metadata=None,
+        )
+
+        assert result.success
+        mock_meta.assert_not_called()
+
+    @patch.object(u.IRIDANextClient, "execute_graphql")
+    def test_update_sample_metadata_success(self, mock_gql, client):
+        """update_sample_metadata parses response correctly."""
+        mock_gql.return_value = {
+            "updateSampleMetadata": {
+                "sample": {"id": "1", "puid": "INXT_SAM_X"},
+                "status": {"organism": "added"},
+                "errors": [],
+            }
+        }
+        result = client.update_sample_metadata(
+            metadata={"organism": "Salmonella"}, sample_puid="INXT_SAM_X"
+        )
+        assert result["sample"]["puid"] == "INXT_SAM_X"
+
+    @patch.object(u.IRIDANextClient, "execute_graphql")
+    def test_update_sample_metadata_errors(self, mock_gql, client):
+        """Metadata update errors raise RuntimeError."""
+        mock_gql.return_value = {
+            "updateSampleMetadata": {
+                "sample": None,
+                "status": None,
+                "errors": [{"path": ["metadata"], "message": "Invalid"}],
+            }
+        }
+        with pytest.raises(RuntimeError, match="Metadata update errors"):
+            client.update_sample_metadata(
+                metadata={"bad": "data"}, sample_puid="INXT_SAM_X"
+            )
 
 
 # ─── Client Initialization Tests ────────────────────────────────────────────

@@ -1,0 +1,4 @@
+sample_name,forward_read,reverse_read,organism,isolate_id,serotype,collection_date,submitting_lab
+sample1,sample1_S1_L001_R1_001.fastq.gz,sample1_S1_L001_R2_001.fastq.gz,Salmonella enterica,ST-001,Enteritidis,2024-01-15,NML Winnipeg
+sample2,sample2_S2_L001_R1_001.fastq.gz,sample2_S2_L001_R2_001.fastq.gz,Escherichia coli,ST-002,O157:H7,2024-01-20,NML Toronto
+sample3,sample3_S3_L001_R1_001.fastq.gz,sample3_S3_L001_R2_001.fastq.gz,Listeria monocytogenes,ST-003,4b,2024-02-01,NML Ottawa
