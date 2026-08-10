@@ -9,9 +9,6 @@ jobs:
   release:
     runs-on: ubuntu-latest
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
-    permissions:
-      contents: write
-      packages: write
 
     steps:
       - name: Checkout
@@ -51,12 +48,12 @@ jobs:
 
       - name: Publish to Forgejo Generic Package Registry
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.TOKEN }}
         run: |
           for file in dist/*; do
             filename=$(basename "$file")
             curl -s -X PUT \
-              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Authorization: token $TOKEN" \
               --upload-file "$file" \
               "https://git.rossfox.xyz/api/packages/ross/generic/inbatchup/latest/$filename"
             echo "Published $filename to generic registry"
@@ -64,12 +61,12 @@ jobs:
 
       - name: Publish to Forgejo PyPI Registry
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.TOKEN }}
         run: |
           python3 -m twine upload \
             --repository-url https://git.rossfox.xyz/api/packages/ross/pypi \
             --username ross \
-            --password "$GITHUB_TOKEN" \
+            --password "$TOKEN" \
             dist/*
           echo "Published to Forgejo PyPI registry"
 
@@ -87,8 +84,6 @@ jobs:
     container: condaforge/mambaforge:latest
     needs: release
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
-    permissions:
-      packages: write
 
     steps:
       - name: Checkout
@@ -105,13 +100,13 @@ jobs:
 
       - name: Publish to Forgejo Conda Registry
         env:
-          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.TOKEN }}
         run: |
           for file in dist-conda/noarch/*.conda dist-conda/noarch/*.tar.bz2; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               curl -s -X PUT \
-                -H "Authorization: token $FORGEJO_TOKEN" \
+                -H "Authorization: token $TOKEN" \
                 --upload-file "$file" \
                 "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename"
               echo "Published $filename to conda registry"
