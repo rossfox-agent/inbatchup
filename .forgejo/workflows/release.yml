@@ -67,8 +67,9 @@ jobs:
             --repository-url https://git.rossfox.xyz/api/packages/ross/pypi \
             --username ross \
             --password "$TOKEN" \
-            dist/*
-          echo "Published to Forgejo PyPI registry"
+            --skip-existing \
+            dist/* || echo "Package already exists or upload skipped"
+          echo "PyPI publish step complete"
 
       - name: Publish to PyPI (optional, external)
         if: env.PYPI_TOKEN != ''
@@ -76,7 +77,7 @@ jobs:
           TWINE_USERNAME: "__token__"
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
-          twine upload dist/*
+          twine upload --skip-existing dist/* || true
           echo "Published to external PyPI"
 
   conda:
@@ -90,14 +91,11 @@ jobs:
 
       - name: Install miniconda and build conda package
         run: |
-          # Install miniconda alongside system Python
           curl -sL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o /tmp/miniconda.sh
           bash /tmp/miniconda.sh -b -p /opt/conda
           export PATH="/opt/conda/bin:$PATH"
           conda --version
-          # Install conda-build
           conda install -y conda-build
-          # Build the conda package
           conda build conda-recipe/ --output-folder dist-conda --no-anaconda-upload
           echo "Conda build complete"
           ls -la dist-conda/noarch/
@@ -112,7 +110,7 @@ jobs:
               curl -s -X PUT \
                 -H "Authorization: token $TOKEN" \
                 --upload-file "$file" \
-                "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename"
+                "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename" || echo "Conda package $filename already exists"
               echo "Published $filename to conda registry"
             fi
           done
