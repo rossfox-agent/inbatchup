@@ -8,7 +8,6 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    container: python:3.12-slim
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
 
     steps:
@@ -17,9 +16,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y git
           python -m pip install --upgrade pip
           pip install requests pytest build twine python-semantic-release
 
@@ -39,7 +42,7 @@ jobs:
           GIT_COMMITTER_NAME: "Forgejo CI"
           GIT_COMMITTER_EMAIL: "ci@rossfox.xyz"
         run: |
-          semantic-release publish || echo "No release needed (no new commits since last release)"
+          semantic-release publish || echo "No release needed"
 
       - name: Build package
         run: |
