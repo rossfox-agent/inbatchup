@@ -15,33 +15,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install requests pytest build
+          python3 --version
+          python3 -m pip install --upgrade pip
+          python3 -m pip install requests pytest build
 
       - name: Lint (syntax check)
         run: |
-          python -m py_compile irida_batch_uploader.py
+          python3 -m py_compile irida_batch_uploader.py
           echo "Syntax OK"
 
       - name: Run unit tests
-        run: pytest tests/ -v --tb=short
+        run: python3 -m pytest tests/ -v --tb=short
 
       - name: Build package
         run: |
-          python -m build
+          python3 -m build
           echo "Build OK"
           ls -la dist/
 
       - name: Verify built package imports
         run: |
-          pip install dist/*.whl
-          python -c "import irida_batch_uploader; print('Package import OK')"
+          python3 -m pip install dist/*.whl
+          python3 -c "import irida_batch_uploader; print('Package import OK')"
           irida-batch-upload --help | head -5
-          pip uninstall -y irida-next-batch-uploader
+          python3 -m pip uninstall -y irida-next-batch-uploader
