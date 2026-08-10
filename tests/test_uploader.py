@@ -135,6 +135,18 @@ class TestAutoDiscover:
         names = [r[0] for r in result]
         assert "sampleX" in names
 
+    def test_illumina_naming(self, tmp_dir):
+        """Illumina-style filenames with _001 suffix: sample_S1_L001_R1_001.fastq.gz."""
+        (tmp_dir / "24-001_S1_L001_R1_001.fastq.gz").write_bytes(b"r1")
+        (tmp_dir / "24-001_S1_L001_R2_001.fastq.gz").write_bytes(b"r2")
+        (tmp_dir / "24-002_S2_L001_R1_001.fastq.gz").write_bytes(b"r1")
+        (tmp_dir / "24-002_S2_L001_R2_001.fastq.gz").write_bytes(b"r2")
+        result = u.auto_discover_samples(tmp_dir)
+        names = [r[0] for r in result]
+        assert "24-001_S1_L001" in names
+        assert "24-002_S2_L001" in names
+        assert len(result) == 2
+
     def test_empty_dir(self, tmp_dir):
         """Empty directory returns empty list."""
         result = u.auto_discover_samples(tmp_dir)
