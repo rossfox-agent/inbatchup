@@ -19,7 +19,7 @@ jobs:
       - name: Install pip and dependencies
         run: |
           python3 --version
-          apt-get update && apt-get install -y python3-pip wget bzip2
+          apt-get update && apt-get install -y python3-pip
           python3 -m pip install --upgrade pip --break-system-packages
           python3 -m pip install --break-system-packages requests pytest build twine python-semantic-release
 
@@ -70,36 +70,6 @@ jobs:
             dist/*
           echo "Published to Forgejo PyPI registry"
 
-      - name: Install conda and build conda package
-        run: |
-          # Install miniconda
-          curl -sL -o /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-          bash /tmp/miniconda.sh -b -p /opt/conda
-          export PATH="/opt/conda/bin:$PATH"
-          conda --version
-          # Install conda-build
-          conda install -y -c defaults conda-build
-          # Build the conda package
-          conda build conda-recipe/ --output-folder dist-conda --no-anaconda-upload
-          echo "Conda build complete"
-          ls -la dist-conda/noarch/
-
-      - name: Publish to Forgejo Conda Registry
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          export PATH="/opt/conda/bin:$PATH"
-          for file in dist-conda/noarch/*.conda dist-conda/noarch/*.tar.bz2; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file")
-              curl -s -X PUT \
-                -H "Authorization: token $GITHUB_TOKEN" \
-                --upload-file "$file" \
-                "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename"
-              echo "Published $filename to conda registry"
-            fi
-          done
-
       - name: Publish to PyPI (optional, external)
         if: env.PYPI_TOKEN != ''
         env:
@@ -108,3 +78,37 @@ jobs:
         run: |
           twine upload dist/*
           echo "Published to external PyPI"
+
+  conda:
+    runs-on: ubuntu-latest
+    container: condaforge/mambaforge:latest
+    needs: release
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install conda-build
+        run: |
+          mamba install -y conda-build
+
+      - name: Build conda package
+        run: |
+          conda build conda-recipe/ --output-folder dist-conda --no-anaconda-upload
+          ls -la dist-conda/noarch/
+
+      - name: Publish to Forgejo Conda Registry
+        env:
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for file in dist-conda/noarch/*.conda dist-conda/noarch/*.tar.bz2; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              curl -s -X PUT \
+                -H "Authorization: token $FORGEJO_TOKEN" \
+                --upload-file "$file" \
+                "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename"
+              echo "Published $filename to conda registry"
+            fi
+          done
