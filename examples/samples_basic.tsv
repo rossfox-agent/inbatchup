@@ -1,0 +1,6 @@
+sample_name	file1	file2
+24-001	24-001_S1_L001_R1_001.fastq.gz	24-001_S1_L001_R2_001.fastq.gz
+24-002	24-002_S2_L001_R1_001.fastq.gz	24-002_S2_L001_R2_001.fastq.gz
+24-003	24-003_S3_L001_R1_001.fastq.gz	24-003_S3_L001_R2_001.fastq.gz
+24-004	24-004_S4_L001_R1_001.fastq.gz	24-004_S4_L001_R2_001.fastq.gz
+24-005	24-005.fastq.gz

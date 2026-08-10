@@ -238,13 +238,21 @@ Tests cover:
 irida-next-batch-uploader/
 ├── irida_batch_uploader.py   # Main CLI tool
 ├── tests/
-│   └── test_uploader.py      # Unit tests (45 tests)
-├── example_samplesheet.tsv   # Example TSV samplesheet
-├── example_metadata.csv      # Example CSV with metadata columns
+│   └── test_uploader.py      # Unit tests (46 tests)
+├── examples/                 # End-to-end examples
+│   ├── README.md             # Full walkthrough with all modes
+│   ├── run_upload.sh         # Shell script demonstrating the full workflow
+│   ├── samples_basic.tsv     # Example TSV samplesheet (no metadata)
+│   ├── samples_with_metadata.csv  # Example CSV with metadata columns
+│   ├── example_samplesheet.tsv    # Simple TSV example
+│   ├── example_metadata.csv       # Simple CSV with metadata
+│   └── data/                 # Dummy sequencing files (created by run_upload.sh)
 ├── pytest.ini                # Pytest configuration
 ├── CHANGELOG.md              # Version history
 └── README.md                 # This file
 ```
+
+See `examples/README.md` for a full end-to-end walkthrough of all upload modes.
 
 ## Git Flow
 
