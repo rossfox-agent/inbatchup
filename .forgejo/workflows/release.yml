@@ -20,8 +20,8 @@ jobs:
         run: |
           python3 --version
           apt-get update && apt-get install -y python3-pip
-          python3 -m pip install --upgrade pip
-          python3 -m pip install requests pytest build twine python-semantic-release
+          python3 -m pip install --upgrade pip --break-system-packages
+          python3 -m pip install --break-system-packages requests pytest build twine python-semantic-release
 
       - name: Run tests
         run: python3 -m pytest tests/ -v --tb=short
