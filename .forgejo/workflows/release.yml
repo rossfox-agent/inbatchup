@@ -48,12 +48,12 @@ jobs:
 
       - name: Publish to Forgejo Generic Package Registry
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for file in dist/*; do
             filename=$(basename "$file")
             curl -s -X PUT \
-              -H "Authorization: token $FORGEJO_TOKEN" \
+              -H "Authorization: token $GITHUB_TOKEN" \
               --upload-file "$file" \
               "https://git.rossfox.xyz/api/packages/ross/generic/irida-next-batch-uploader/latest/$filename"
             echo "Published $filename to generic registry"
@@ -61,12 +61,12 @@ jobs:
 
       - name: Publish to Forgejo PyPI Registry
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 -m twine upload \
             --repository-url https://git.rossfox.xyz/api/packages/ross/pypi \
             --username ross \
-            --password "$FORGEJO_TOKEN" \
+            --password "$GITHUB_TOKEN" \
             dist/*
           echo "Published to Forgejo PyPI registry"
 
@@ -86,14 +86,14 @@ jobs:
 
       - name: Publish to Forgejo Conda Registry
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           export PATH="/opt/conda/bin:$PATH"
           for file in dist-conda/noarch/*.conda dist-conda/noarch/*.tar.bz2; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               curl -s -X PUT \
-                -H "Authorization: token $FORGEJO_TOKEN" \
+                -H "Authorization: token $GITHUB_TOKEN" \
                 --upload-file "$file" \
                 "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename"
               echo "Published $filename to conda registry"
