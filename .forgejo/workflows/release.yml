@@ -19,7 +19,7 @@ jobs:
       - name: Install pip and dependencies
         run: |
           python3 --version
-          apt-get update && apt-get install -y python3-pip
+          apt-get update && apt-get install -y python3-pip wget bzip2
           python3 -m pip install --upgrade pip --break-system-packages
           python3 -m pip install --break-system-packages requests pytest build twine python-semantic-release
 
@@ -41,7 +41,7 @@ jobs:
         run: |
           semantic-release publish || echo "No release needed"
 
-      - name: Build package
+      - name: Build Python package
         run: |
           python3 -m build
           ls -la dist/
@@ -56,14 +56,55 @@ jobs:
               -H "Authorization: token $FORGEJO_TOKEN" \
               --upload-file "$file" \
               "https://git.rossfox.xyz/api/packages/ross/generic/irida-next-batch-uploader/latest/$filename"
-            echo "Published $filename"
+            echo "Published $filename to generic registry"
           done
 
-      - name: Publish to PyPI (optional)
+      - name: Publish to Forgejo PyPI Registry
+        env:
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: |
+          python3 -m twine upload \
+            --repository-url https://git.rossfox.xyz/api/packages/ross/pypi \
+            --username ross \
+            --password "$FORGEJO_TOKEN" \
+            dist/*
+          echo "Published to Forgejo PyPI registry"
+
+      - name: Install conda and build conda package
+        run: |
+          # Install miniconda
+          wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
+          bash /tmp/miniconda.sh -b -p /opt/conda
+          export PATH="/opt/conda/bin:$PATH"
+          conda --version
+          # Install conda-build
+          conda install -y -c defaults conda-build
+          # Build the conda package
+          conda build conda-recipe/ --output-folder dist-conda --no-anaconda-upload
+          echo "Conda build complete"
+          ls -la dist-conda/noarch/
+
+      - name: Publish to Forgejo Conda Registry
+        env:
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: |
+          export PATH="/opt/conda/bin:$PATH"
+          for file in dist-conda/noarch/*.conda dist-conda/noarch/*.tar.bz2; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              curl -s -X PUT \
+                -H "Authorization: token $FORGEJO_TOKEN" \
+                --upload-file "$file" \
+                "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename"
+              echo "Published $filename to conda registry"
+            fi
+          done
+
+      - name: Publish to PyPI (optional, external)
         if: env.PYPI_TOKEN != ''
         env:
           TWINE_USERNAME: "__token__"
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
           twine upload dist/*
-          echo "Published to PyPI"
+          echo "Published to external PyPI"
