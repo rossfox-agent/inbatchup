@@ -37,11 +37,50 @@ Authentication uses **HTTP Basic Auth** with your email as the username and a **
                                                 └─────────────────┘
 ```
 
-## Prerequisites
+## Installation
+
+### From PyPI (Forgejo registry)
 
 ```bash
-pip install requests pytest
+pip install irida-next-batch-uploader \
+  --index-url https://git.rossfox.xyz/api/packages/ross/pypi/simple
 ```
+
+Or add the registry to your `pip.conf` / `~/.pypirc`:
+
+```ini
+[global]
+extra-index-url = https://git.rossfox.xyz/api/packages/ross/pypi/simple
+```
+
+Then:
+
+```bash
+pip install irida-next-batch-uploader
+```
+
+### From Conda (Forgejo registry)
+
+```bash
+conda config --add channels https://git.rossfox.xyz/api/packages/ross/conda
+conda install irida-next-batch-uploader
+```
+
+Or specify the channel directly:
+
+```bash
+conda install -c https://git.rossfox.xyz/api/packages/ross/conda irida-next-batch-uploader
+```
+
+### From source
+
+```bash
+git clone https://github.com/rossfox-agent/irida-next-batch-uploader.git
+cd irida-next-batch-uploader
+pip install .
+```
+
+### Prerequisites
 
 You need a **Personal Access Token** from IRIDA Next:
 1. Log in to your IRIDA Next instance
