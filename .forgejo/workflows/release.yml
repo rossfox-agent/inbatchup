@@ -55,7 +55,7 @@ jobs:
             curl -s -X PUT \
               -H "Authorization: token $GITHUB_TOKEN" \
               --upload-file "$file" \
-              "https://git.rossfox.xyz/api/packages/ross/generic/irida-next-batch-uploader/latest/$filename"
+              "https://git.rossfox.xyz/api/packages/ross/generic/inbatchup/latest/$filename"
             echo "Published $filename to generic registry"
           done
 

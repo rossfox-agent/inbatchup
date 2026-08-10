@@ -1,6 +1,6 @@
 # Examples
 
-End-to-end examples for using the IRIDA Next Batch Uploader. Each example shows the input files, the command, and what happens on the IRIDA Next side.
+End-to-end examples for using the InBatchUp. Each example shows the input files, the command, and what happens on the IRIDA Next side.
 
 ## Directory Structure
 
@@ -36,7 +36,7 @@ sample_name	file1	file2
 **Command:**
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -78,7 +78,7 @@ sample_name,forward_read,reverse_read,organism,isolate_id,serotype,collection_da
 **Command:**
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -113,7 +113,7 @@ No samplesheet needed — the tool scans a directory for `*_R1.fastq.gz` / `*_R2
 **Command:**
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -132,7 +132,7 @@ The tool finds files matching `*_R1.fastq.gz` and `*_R2.fastq.gz`, pairs them by
 Upload 5 samples concurrently:
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
@@ -151,7 +151,7 @@ python irida_batch_uploader.py \
 For reference genomes, reports, or other non-sample files:
 
 ```bash
-python irida_batch_uploader.py \
+python inbatchup.py \
     --url https://irida.yourlab.ca \
     --email you@lab.ca \
     --token INXT_PAT_xxxxx \
