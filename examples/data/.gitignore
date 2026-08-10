@@ -1,0 +1,6 @@
+# Dummy data files are created by run_upload.sh
+# Real .fastq.gz files should never be committed
+*.fastq.gz
+*.fq.gz
+*.fastq
+*.fq

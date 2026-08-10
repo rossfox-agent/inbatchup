@@ -1,0 +1,6 @@
+sample_name,forward_read,reverse_read,organism,isolate_id,serotype,collection_date,submitting_lab,platform
+24-001,24-001_S1_L001_R1_001.fastq.gz,24-001_S1_L001_R2_001.fastq.gz,Salmonella enterica,SRC-001,Enteritidis,2024-01-15,NML Winnipeg,Illumina MiSeq
+24-002,24-002_S2_L001_R1_001.fastq.gz,24-002_S2_L001_R2_001.fastq.gz,Escherichia coli,SRC-002,O157:H7,2024-01-20,NML Toronto,Illumina NextSeq
+24-003,24-003_S3_L001_R1_001.fastq.gz,24-003_S3_L001_R2_001.fastq.gz,Listeria monocytogenes,SRC-003,4b,2024-02-01,NML Ottawa,Illumina MiSeq
+24-004,24-004_S4_L001_R1_001.fastq.gz,24-004_S4_L001_R2_001.fastq.gz,Salmonella enterica,SRC-004,Typhimurium,2024-02-10,NML Winnipeg,Illumina NovaSeq
+24-005,24-005.fastq.gz,,Campylobacter jejuni,SRC-005,,2024-02-15,NML Calgary,Oxford Nanopore MinION

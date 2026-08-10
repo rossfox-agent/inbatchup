@@ -424,7 +424,7 @@ def auto_discover_samples(input_dir: Path) -> list:
     # Also try .fq.gz
     files.extend(sorted(input_dir.glob("*.fq.gz")))
 
-    paired_pattern = re.compile(r"^(.+?)_R?([12])\.(fastq|fq)\.gz$", re.IGNORECASE)
+    paired_pattern = re.compile(r"^(.+?)_R?([12])(?:_\d+)?\.(fastq|fq)\.gz$", re.IGNORECASE)
     paired = {}  # sample_name → {"1": path, "2": path}
     singles = []
 
