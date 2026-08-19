@@ -461,8 +461,9 @@ class TestGraphQLExecution:
         """Successful GraphQL response returns data."""
         mock_response = MagicMock()
         mock_response.json.return_value = {"data": {"project": {"id": "1"}}}
+        mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
-        client.session.post = MagicMock(return_value=mock_response)
+        client.session.request = MagicMock(return_value=mock_response)
 
         result = client.execute_graphql("query { project { id } }")
         assert result == {"project": {"id": "1"}}
@@ -473,8 +474,9 @@ class TestGraphQLExecution:
         mock_response.json.return_value = {
             "errors": [{"message": "Unauthorized"}]
         }
+        mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
-        client.session.post = MagicMock(return_value=mock_response)
+        client.session.request = MagicMock(return_value=mock_response)
 
         with pytest.raises(RuntimeError, match="GraphQL errors"):
             client.execute_graphql("query { bad }")
@@ -555,8 +557,8 @@ class TestDirectUpload:
         assert du["headers"] == {"Content-Type": "application/octet-stream"}
 
     @patch.object(u.IRIDANextClient, "execute_graphql")
-    @patch("inbatchup.requests.put")
-    def test_upload_file_full_flow(self, mock_put, mock_gql, client, sample_fastq):
+    @patch("inbatchup.http_request_with_retry")
+    def test_upload_file_full_flow(self, mock_retry, mock_gql, client, sample_fastq):
         """Full upload_file returns signed_blob_id after PUT."""
         mock_gql.return_value = {
             "createDirectUpload": {
@@ -568,15 +570,15 @@ class TestDirectUpload:
                 }
             }
         }
-        mock_put.return_value.status_code = 200
+        mock_retry.return_value.status_code = 200
 
         signed_id = client.upload_file(sample_fastq)
         assert signed_id == "signed-blob-456"
-        mock_put.assert_called_once()
+        mock_retry.assert_called_once()
 
     @patch.object(u.IRIDANextClient, "execute_graphql")
-    @patch("inbatchup.requests.put")
-    def test_upload_file_put_fails(self, mock_put, mock_gql, client, sample_fastq):
+    @patch("inbatchup.http_request_with_retry")
+    def test_upload_file_put_fails(self, mock_retry, mock_gql, client, sample_fastq):
         """PUT failure raises RuntimeError."""
         mock_gql.return_value = {
             "createDirectUpload": {
@@ -588,8 +590,8 @@ class TestDirectUpload:
                 }
             }
         }
-        mock_put.return_value.status_code = 500
-        mock_put.return_value.text = "Internal Server Error"
+        mock_retry.return_value.status_code = 500
+        mock_retry.return_value.text = "Internal Server Error"
 
         with pytest.raises(RuntimeError, match="Direct upload PUT failed"):
             client.upload_file(sample_fastq)
@@ -646,3 +648,288 @@ class TestUploadResult:
         )
         assert r.success
         assert len(r.files_uploaded) == 2
+
+
+# ─── Version Tests ─────────────────────────────────────────────────────────
+
+class TestVersion:
+    def test_version_constant_present(self):
+        """__version__ is a non-empty string."""
+        assert isinstance(u.__version__, str)
+        assert u.__version__  # non-empty
+
+    def test_version_matches_pyproject(self):
+        """__version__ should match pyproject.toml's project.version (semantic-release updates both)."""
+        import tomllib
+        from pathlib import Path
+        with open(Path(u.__file__).parent / "pyproject.toml", "rb") as f:
+            data = tomllib.load(f)
+        assert u.__version__ == data["project"]["version"]
+
+
+# ─── HTTP Retry Tests ──────────────────────────────────────────────────────
+
+class TestHttpRetry:
+    def test_succeeds_on_first_try(self, monkeypatch):
+        """No retry needed when request succeeds."""
+        import requests
+        fake = MagicMock(spec=requests.Response)
+        fake.status_code = 200
+        fake.raise_for_status = MagicMock()
+        sess = MagicMock()
+        sess.request.return_value = fake
+
+        sleep_calls = []
+        monkeypatch.setattr(u.time, "sleep", lambda s: sleep_calls.append(s))
+
+        resp = u.http_request_with_retry(
+            "GET", "https://x.test", session=sess, max_retries=3, base_backoff=0.01,
+        )
+        assert resp.status_code == 200
+        assert sess.request.call_count == 1
+        assert sleep_calls == []  # no backoff
+
+    def test_retries_on_429(self, monkeypatch):
+        """429 should trigger retry until success."""
+        import requests
+        resp_429 = MagicMock(spec=requests.Response)
+        resp_429.status_code = 429
+        resp_429.headers = {"Retry-After": "0.01"}
+
+        resp_ok = MagicMock(spec=requests.Response)
+        resp_ok.status_code = 200
+
+        sess = MagicMock()
+        sess.request.side_effect = [resp_429, resp_ok]
+
+        monkeypatch.setattr(u.time, "sleep", lambda s: None)
+
+        resp = u.http_request_with_retry(
+            "GET", "https://x.test", session=sess, max_retries=3, base_backoff=0.01,
+        )
+        assert resp.status_code == 200
+        assert sess.request.call_count == 2
+
+    def test_retries_on_5xx(self, monkeypatch):
+        """500/502/503/504 should trigger retry."""
+        import requests
+        resp_500 = MagicMock(spec=requests.Response)
+        resp_500.status_code = 500
+        resp_500.headers = {}
+
+        resp_ok = MagicMock(spec=requests.Response)
+        resp_ok.status_code = 200
+
+        sess = MagicMock()
+        sess.request.side_effect = [resp_500, resp_500, resp_ok]
+        monkeypatch.setattr(u.time, "sleep", lambda s: None)
+
+        resp = u.http_request_with_retry(
+            "GET", "https://x.test", session=sess, max_retries=3, base_backoff=0.01,
+        )
+        assert resp.status_code == 200
+        assert sess.request.call_count == 3
+
+    def test_exhausts_retries(self, monkeypatch):
+        """After max_retries attempts, raise HTTPError on the last response."""
+        import requests
+        resp_429 = MagicMock(spec=requests.Response)
+        resp_429.status_code = 429
+        resp_429.headers = {}
+        resp_429.raise_for_status = MagicMock(side_effect=requests.HTTPError("429 too many"))
+
+        sess = MagicMock()
+        sess.request.return_value = resp_429
+        monkeypatch.setattr(u.time, "sleep", lambda s: None)
+
+        with pytest.raises(requests.HTTPError):
+            u.http_request_with_retry(
+                "GET", "https://x.test", session=sess, max_retries=2, base_backoff=0.01,
+            )
+        assert sess.request.call_count == 2
+
+    def test_no_retry_on_400(self, monkeypatch):
+        """400 is a client error and should NOT trigger retry."""
+        import requests
+        resp_400 = MagicMock(spec=requests.Response)
+        resp_400.status_code = 400
+        resp_400.raise_for_status = MagicMock()
+
+        sess = MagicMock()
+        sess.request.return_value = resp_400
+        monkeypatch.setattr(u.time, "sleep", lambda s: None)
+
+        resp = u.http_request_with_retry(
+            "GET", "https://x.test", session=sess, max_retries=3, base_backoff=0.01,
+        )
+        assert sess.request.call_count == 1
+
+    def test_retries_on_connection_error(self, monkeypatch):
+        """Network errors should retry then raise."""
+        import requests
+        sess = MagicMock()
+        sess.request.side_effect = [
+            requests.ConnectionError("net1"),
+            requests.ConnectionError("net2"),
+            MagicMock(status_code=200, headers={}),
+        ]
+        monkeypatch.setattr(u.time, "sleep", lambda s: None)
+
+        resp = u.http_request_with_retry(
+            "GET", "https://x.test", session=sess, max_retries=3, base_backoff=0.01,
+        )
+        assert resp.status_code == 200
+        assert sess.request.call_count == 3
+
+    def test_honors_retry_after_header(self, monkeypatch):
+        """Retry-After header value should be used as sleep duration."""
+        import requests
+        resp_429 = MagicMock(spec=requests.Response)
+        resp_429.status_code = 429
+        resp_429.headers = {"Retry-After": "5.5"}
+
+        resp_ok = MagicMock(spec=requests.Response)
+        resp_ok.status_code = 200
+
+        sess = MagicMock()
+        sess.request.side_effect = [resp_429, resp_ok]
+
+        sleep_calls = []
+        monkeypatch.setattr(u.time, "sleep", lambda s: sleep_calls.append(s))
+
+        u.http_request_with_retry(
+            "GET", "https://x.test", session=sess, max_retries=3, base_backoff=0.01,
+        )
+        assert sleep_calls == [5.5]
+
+
+# ─── Paired-File Grouping Tests ────────────────────────────────────────────
+
+class TestPairedFileGrouping:
+    def test_slash_in_column_autodetects_grouping(self, tmp_dir):
+        """Columns with '/' are auto-grouped under the prefix."""
+        csv_path = tmp_dir / "samples.csv"
+        csv_path.write_text(
+            "sample_name,ompA/forward_path,ompA/reverse_path,organism\n"
+            "s1,/data/s1_fwd.gz,/data/s1_rev.gz,Salmonella\n"
+        )
+        parsed = u.parse_metadata_file(
+            str(csv_path), sample_column="sample_name",
+            file_columns=["ompA/forward_path", "ompA/reverse_path"],
+        )
+        assert len(parsed) == 1
+        name, files, meta = parsed[0]
+        assert name == "s1"
+        assert isinstance(files, dict)
+        assert "ompA" in files
+        assert files["ompA"] == ["/data/s1_fwd.gz", "/data/s1_rev.gz"]
+        assert meta == {"organism": "Salmonella"}
+
+    def test_paired_overrides_explicit(self, tmp_dir):
+        """--paired-files equivalent: explicit assay grouping without slash headers."""
+        csv_path = tmp_dir / "samples.csv"
+        csv_path.write_text(
+            "sample_name,fwd,rev,mlst_a,mlst_b,organism\n"
+            "s1,/data/s1_fwd.gz,/data/s1_rev.gz,/data/s1_a.gz,/data/s1_b.gz,Salmonella\n"
+        )
+        parsed = u.parse_metadata_file(
+            str(csv_path), sample_column="sample_name",
+            file_columns=["fwd", "rev", "mlst_a", "mlst_b"],
+            paired_overrides={"ompA": ["fwd", "rev"], "mlst": ["mlst_a", "mlst_b"]},
+        )
+        assert len(parsed) == 1
+        name, files, meta = parsed[0]
+        assert isinstance(files, dict)
+        assert sorted(files.keys()) == ["mlst", "ompA"]
+        assert files["ompA"] == ["/data/s1_fwd.gz", "/data/s1_rev.gz"]
+        assert files["mlst"] == ["/data/s1_a.gz", "/data/s1_b.gz"]
+
+    def test_no_grouping_legacy_behavior(self, tmp_dir):
+        """Without slash or overrides, return flat list (backwards compatible)."""
+        csv_path = tmp_dir / "samples.csv"
+        csv_path.write_text(
+            "sample_name,file1,file2,organism\n"
+            "s1,/data/a.gz,/data/b.gz,Salmonella\n"
+        )
+        parsed = u.parse_metadata_file(
+            str(csv_path), sample_column="sample_name",
+            file_columns=["file1", "file2"],
+        )
+        assert len(parsed) == 1
+        name, files, _meta = parsed[0]
+        assert isinstance(files, list)
+        assert files == ["/data/a.gz", "/data/b.gz"]
+
+    def test_ungrouped_columns_mixed_with_grouped(self, tmp_dir):
+        """Mixed: some slash columns group, others go to _ungrouped."""
+        csv_path = tmp_dir / "samples.csv"
+        csv_path.write_text(
+            "sample_name,ompA/forward_path,reference_fasta\n"
+            "s1,/data/s1_fwd.gz,/data/ref.fa\n"
+        )
+        parsed = u.parse_metadata_file(
+            str(csv_path), sample_column="sample_name",
+            file_columns=["ompA/forward_path", "reference_fasta"],
+        )
+        name, files, _meta = parsed[0]
+        assert isinstance(files, dict)
+        assert "ompA" in files
+        assert "_ungrouped" in files
+
+
+# ─── Missing File Behavior Tests ───────────────────────────────────────────
+
+class TestMissingFileBehavior:
+    @patch.object(u, "http_request_with_retry")
+    def test_missing_file_skipped_default(self, mock_http, tmp_dir):
+        """Default (non-strict): missing file → row fails with warning, no exception raised."""
+        # Point to files that don't exist
+        fake_file = "/nonexistent/path/sample_R1.fastq.gz"
+        client = u.IRIDANextClient("https://x.test", "a@b.c", "tok", verify_ssl=False)
+
+        # Mock the sample-creation and metadata-update calls (file upload won't happen due to missing file)
+        with patch.object(client, "create_sample") as mock_create, \
+             patch.object(client, "attach_files_to_sample") as mock_attach, \
+             patch.object(client, "update_sample_metadata") as mock_meta:
+            mock_create.return_value = {"id": "1", "puid": "INXT_SAM_X"}
+            mock_attach.return_value = {"sample": {"id": "1", "puid": "INXT_SAM_X"}, "status": {}, "errors": []}
+
+            r = u.upload_sample(
+                client, "s1", [fake_file], tmp_dir,
+                project_puid="INXT_PRJ_X",
+            )
+            assert r.success is False
+            assert "File not found" in r.message
+            mock_create.assert_called_once()  # sample is created first
+            mock_attach.assert_not_called()    # but no attach since no files uploaded
+
+    @patch.object(u, "http_request_with_retry")
+    def test_missing_file_strict_raises(self, mock_http, tmp_dir):
+        """With --strict: missing file raises FileNotFoundError before any API call."""
+        fake_file = "/nonexistent/path/sample_R1.fastq.gz"
+        client = u.IRIDANextClient("https://x.test", "a@b.c", "tok", verify_ssl=False)
+
+        with patch.object(client, "create_sample") as mock_create:
+            with pytest.raises(FileNotFoundError):
+                u.upload_sample(
+                    client, "s1", [fake_file], tmp_dir,
+                    project_puid="INXT_PRJ_X",
+                    strict=True,
+                )
+            mock_create.assert_not_called()  # strict aborts BEFORE creating the sample
+
+    def test_empty_sample_name_skipped(self, tmp_dir):
+        """Empty sample_name rows are silently skipped."""
+        csv_path = tmp_dir / "samples.csv"
+        csv_path.write_text(
+            "sample_name,file1,file2\n"
+            "s1,a.gz,b.gz\n"
+            ",c.gz,d.gz\n"  # empty sample name
+            "s2,e.gz,f.gz\n"
+        )
+        parsed = u.parse_metadata_file(
+            str(csv_path), sample_column="sample_name",
+            file_columns=["file1", "file2"],
+        )
+        names = [p[0] for p in parsed]
+        assert names == ["s1", "s2"]
