@@ -64,7 +64,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-__version__ = "0.6.4"
+__version__ = "0.7.0"
 
 
 @dataclass
