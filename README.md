@@ -201,14 +201,60 @@ python inbatchup.py \
     --token INXT_PAT_xxxxx \
     --project-puid INXT_PRJ_AAAAAAAAAA \
     --auto-discover \
-    --input-dir /data/runs/run001 \
+    --input-dir /data/run001 \
     --dry-run
 ```
+
+### Paired files with logical assay grouping
+
+If your CSV/TSV has multiple assay types per sample (e.g. ompA + mlst), group the
+file columns into logical assays using either:
+
+1. **Slash-prefixed column names** (auto-detected): include `/` in the column header
+   so the prefix becomes the assay name.
+
+   ```csv
+   sample_name,ompA/forward_path,ompA/reverse_path,mlst/arcA,mlst/arcB
+   sample1,s1_ompA_fwd.gz,s1_ompA_rev.gz,s1_mlst_arcA.gz,s1_mlst_arcB.gz
+   ```
+
+   ```bash
+   inbatchup \
+       --metadata-file samples.csv \
+       --sample-column sample_name \
+       --file-columns "ompA/forward_path" "ompA/reverse_path" "mlst/arcA" "mlst/arcB"
+   ```
+
+2. **`--paired-files ASSAY:COL1,COL2[,...]`** for arbitrary column names:
+
+   ```csv
+   sample_name,fwd,rev,arcA,arcB
+   sample1,s1_fwd.gz,s1_rev.gz,s1_arcA.gz,s1_arcB.gz
+   ```
+
+   ```bash
+   inbatchup \
+       --metadata-file samples.csv \
+       --sample-column sample_name \
+       --paired-files ompA:fwd,rev mlst:arcA,arcB
+   ```
+
+### Retry behaviour and missing files
+
+`inbatchup` automatically retries HTTP requests that hit `429` (rate limit) or
+`5xx` (server error), honouring the `Retry-After` header when present, otherwise
+falling back to exponential backoff with jitter. Configure with
+`--max-retries` (default 3) and `--retry-backoff` (default 1.0s base).
+
+By default, missing files in a row are skipped with a warning and the row is
+marked failed — the rest of the batch continues. Use `--strict` to abort on the
+first missing file instead.
 
 ## Flags
 
 | Flag | Required | Description |
 |------|----------|-------------|
+| `--version` | | Print version and exit. |
 | `--url` | ✅ | IRIDA Next base URL |
 | `--email` | ✅ | User email for auth |
 | `--token` | ✅ | Personal Access Token |
@@ -217,13 +263,17 @@ python inbatchup.py \
 | `--samplesheet` | one of | TSV file: `sample_name<TAB>file1[<TAB>file2]` |
 | `--metadata-file` | one of | CSV or TSV file with sample names, file paths, and metadata columns |
 | `--sample-column` | | Column name in `--metadata-file` for the sample name (default: `sample_name`) |
-| `--file-columns` | | Column name(s) in `--metadata-file` for file paths (default: `file1 file2`). All other columns become sample metadata. |
+| `--file-columns` | | Column name(s) in `--metadata-file` for file paths (default: `file1 file2`). Column names containing `/` are auto-grouped into logical assays. All other columns become sample metadata. |
+| `--paired-files` | | Explicit assay grouping when columns don't have `/`: `--paired-files ompA:fwd,rev mlst:arcA,arcB`. |
 | `--auto-discover` | one of | Auto-discover paired-end FASTQ files in `--input-dir` |
 | `--attach-to-project` | one of | Attach files to project instead of creating samples |
 | `--input-dir` | | Base directory for resolving file paths (default: `.`) |
 | `--description` | | Description for created samples |
 | `--no-verify-ssl` | | Disable SSL certificate verification |
 | `--workers` | | Number of parallel upload workers (default: 1) |
+| `--max-retries` | | Max retry attempts for HTTP 429 / 5xx / network errors (default: 3) |
+| `--retry-backoff` | | Base backoff in seconds for retries; doubled with jitter each attempt (default: 1.0) |
+| `--strict` | | Abort on the first missing file (default: skip + warn + continue). |
 | `--dry-run` | | List what would be uploaded without changes |
 
 ## File Requirements
