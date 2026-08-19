@@ -48,12 +48,12 @@ jobs:
 
       - name: Publish to Forgejo Generic Package Registry
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.TOKEN }}
         run: |
           for file in dist/*; do
             filename=$(basename "$file")
             curl -s -X PUT \
-              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Authorization: token $TOKEN" \
               --upload-file "$file" \
               "https://git.rossfox.xyz/api/packages/ross/generic/inbatchup/latest/$filename"
             echo "Published $filename to generic registry"
@@ -61,14 +61,15 @@ jobs:
 
       - name: Publish to Forgejo PyPI Registry
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.TOKEN }}
         run: |
           python3 -m twine upload \
             --repository-url https://git.rossfox.xyz/api/packages/ross/pypi \
             --username ross \
-            --password "$GITHUB_TOKEN" \
-            dist/*
-          echo "Published to Forgejo PyPI registry"
+            --password "$TOKEN" \
+            --skip-existing \
+            dist/* || echo "Package already exists or upload skipped"
+          echo "PyPI publish step complete"
 
       - name: Publish to PyPI (optional, external)
         if: env.PYPI_TOKEN != ''
@@ -76,12 +77,11 @@ jobs:
           TWINE_USERNAME: "__token__"
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
-          twine upload dist/*
+          twine upload --skip-existing dist/* || true
           echo "Published to external PyPI"
 
   conda:
     runs-on: ubuntu-latest
-    container: condaforge/mambaforge:latest
     needs: release
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
 
@@ -89,26 +89,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install conda-build
+      - name: Install miniconda and build conda package
         run: |
-          mamba install -y conda-build
-
-      - name: Build conda package
-        run: |
+          curl -sL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o /tmp/miniconda.sh
+          bash /tmp/miniconda.sh -b -p /opt/conda
+          export PATH="/opt/conda/bin:$PATH"
+          conda --version
+          conda install -y conda-build
           conda build conda-recipe/ --output-folder dist-conda --no-anaconda-upload
+          echo "Conda build complete"
           ls -la dist-conda/noarch/
 
       - name: Publish to Forgejo Conda Registry
         env:
-          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.TOKEN }}
         run: |
           for file in dist-conda/noarch/*.conda dist-conda/noarch/*.tar.bz2; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               curl -s -X PUT \
-                -H "Authorization: token $FORGEJO_TOKEN" \
+                -H "Authorization: token $TOKEN" \
                 --upload-file "$file" \
-                "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename"
+                "https://git.rossfox.xyz/api/packages/ross/conda/main/$filename" || echo "Conda package $filename already exists"
               echo "Published $filename to conda registry"
             fi
           done

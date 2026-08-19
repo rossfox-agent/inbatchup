@@ -53,14 +53,18 @@ import csv
 import hashlib
 import json
 import os
+import random
 import re
 import sys
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union, List, Dict
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+
+__version__ = "0.7.1"
 
 
 @dataclass
@@ -75,12 +79,15 @@ class UploadResult:
 class IRIDANextClient:
     """GraphQL client for IRIDA Next with Active Storage direct upload support."""
 
-    def __init__(self, base_url: str, email: str, token: str, verify_ssl: bool = True):
+    def __init__(self, base_url: str, email: str, token: str, verify_ssl: bool = True,
+                 max_retries: int = 3, base_backoff: float = 1.0):
         self.base_url = base_url.rstrip("/")
         self.graphql_url = f"{self.base_url}/graphql"
         self.email = email
         self.token = token
         self.verify_ssl = verify_ssl
+        self.max_retries = max_retries
+        self.base_backoff = base_backoff
         self.session = requests.Session()
         credentials = base64.b64encode(f"{email}:{token}".encode()).decode()
         self.session.headers.update({
@@ -89,12 +96,19 @@ class IRIDANextClient:
         })
 
     def execute_graphql(self, query: str, variables: dict = None) -> dict:
-        """Execute a GraphQL query/mutation and return the data."""
+        """Execute a GraphQL query/mutation with rate-limit-aware retry."""
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
-        resp = self.session.post(
-            self.graphql_url, json=payload, verify=self.verify_ssl, timeout=120
+        resp = http_request_with_retry(
+            "POST",
+            self.graphql_url,
+            json=payload,
+            verify=self.verify_ssl,
+            timeout=120,
+            max_retries=self.max_retries,
+            base_backoff=self.base_backoff,
+            session=self.session,
         )
         resp.raise_for_status()
         result = resp.json()
@@ -102,8 +116,9 @@ class IRIDANextClient:
             raise RuntimeError(f"GraphQL errors: {json.dumps(result['errors'], indent=2)}")
         return result.get("data", {})
 
-    def create_sample(self, name: str, project_id: str = None, project_puid: str = None,
-                      description: str = None) -> dict:
+    def create_sample(self, name: str, project_id: Optional[str] = None,
+                      project_puid: Optional[str] = None,
+                      description: Optional[str] = None) -> dict:
         """Create a sample in a project. Returns sample dict with id, puid."""
         mutation = """
         mutation CreateSample($name: String!, $projectId: ID, $projectPuid: ID, $description: String) {
@@ -172,18 +187,22 @@ class IRIDANextClient:
     def upload_file(self, file_path: Path, content_type: str = "application/octet-stream") -> str:
         """
         Full file upload: create direct upload → PUT binary → return signed_blob_id.
+        Retries on 429 / 5xx for both the GraphQL mutation and the direct PUT.
         """
         du = self.create_direct_upload(file_path, content_type)
         upload_url = du["url"]
         headers = du["headers"]
 
         with open(file_path, "rb") as f:
-            put_resp = requests.put(
+            put_resp = http_request_with_retry(
+                "PUT",
                 upload_url,
                 data=f,
                 headers=headers,
                 verify=self.verify_ssl,
                 timeout=600,
+                max_retries=self.max_retries,
+                base_backoff=self.base_backoff,
             )
         if put_resp.status_code not in (200, 201, 204):
             raise RuntimeError(
@@ -192,8 +211,9 @@ class IRIDANextClient:
             )
         return du["signedBlobId"]
 
-    def attach_files_to_sample(self, signed_blob_ids: list, sample_id: str = None,
-                               sample_puid: str = None) -> dict:
+    def attach_files_to_sample(self, signed_blob_ids: list,
+                               sample_id: Optional[str] = None,
+                               sample_puid: Optional[str] = None) -> dict:
         """Attach uploaded files (by signed blob IDs) to a sample."""
         mutation = """
         mutation AttachFilesToSample($files: [String!]!, $sampleId: ID, $samplePuid: ID) {
@@ -261,8 +281,8 @@ class IRIDANextClient:
     def get_project(self, project_id: str = None, project_puid: str = None) -> dict:
         """Fetch project details."""
         query = """
-        query GetProject($id: ID, $puid: ID) {
-            project(id: $id, puid: $puid) {
+        query GetProject($fullPath: ID, $puid: ID) {
+            project(fullPath: $fullPath, puid: $puid) {
                 id
                 puid
                 name
@@ -272,14 +292,15 @@ class IRIDANextClient:
         """
         variables = {}
         if project_id:
-            variables["id"] = project_id
+            variables["fullPath"] = project_id
         if project_puid:
             variables["puid"] = project_puid
         data = self.execute_graphql(query, variables)
         return data.get("project", {})
 
-    def update_sample_metadata(self, metadata: dict, sample_id: str = None,
-                              sample_puid: str = None) -> dict:
+    def update_sample_metadata(self, metadata: dict,
+                              sample_id: Optional[str] = None,
+                              sample_puid: Optional[str] = None) -> dict:
         """Update metadata for a sample via updateSampleMetadata mutation."""
         mutation = """
         mutation UpdateSampleMetadata($metadata: JSON!, $sampleId: ID, $samplePuid: ID) {
@@ -321,6 +342,83 @@ class IRIDANextClient:
         return base64.b64encode(md5.digest()).decode()
 
 
+def http_request_with_retry(
+    method: str,
+    url: str,
+    *,
+    max_retries: int = 3,
+    base_backoff: float = 1.0,
+    max_backoff: float = 30.0,
+    retry_on_status: tuple = (429, 500, 502, 503, 504),
+    session: Optional[requests.Session] = None,
+    **kwargs,
+) -> requests.Response:
+    """
+    Issue an HTTP request with rate-limit-aware retry.
+
+    Retries on:
+      - HTTP 429 (Too Many Requests) — honors `Retry-After` header if present
+      - HTTP 5xx (server errors)
+      - Network-level errors (ConnectionError, Timeout, etc.)
+
+    Backoff strategy:
+      - If `Retry-After` header is present, sleep that long (clamped to max_backoff)
+      - Otherwise exponential backoff with jitter: base_backoff * 2^attempt + random(0, 1)
+
+    Args:
+        method: HTTP verb ("GET", "POST", "PUT", ...).
+        url: Full URL.
+        max_retries: Total attempts (0 = no retry, 1 = no retry, 3 = try 3 times).
+        base_backoff: Initial backoff in seconds.
+        max_backoff: Cap on backoff (and Retry-After) in seconds.
+        retry_on_status: HTTP status codes that trigger a retry.
+        session: Optional requests.Session to reuse (recommended).
+        **kwargs: Forwarded to requests.request().
+
+    Returns:
+        The successful Response object.
+
+    Raises:
+        requests.HTTPError: If a non-retry status code is returned.
+        requests.RequestException: If network errors persist after max_retries.
+    """
+    sess = session or requests
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            resp = sess.request(method, url, **kwargs)
+        except requests.RequestException as e:
+            last_exc = e
+            if attempt + 1 >= max_retries:
+                raise
+            sleep_for = min(base_backoff * (2 ** attempt) + random.random(), max_backoff)
+            time.sleep(sleep_for)
+            continue
+
+        if resp.status_code not in retry_on_status:
+            return resp
+
+        # Got a retryable status
+        if attempt + 1 >= max_retries:
+            resp.raise_for_status()  # surface the last error
+            return resp  # unreachable, satisfies type checker
+
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after is not None:
+            try:
+                sleep_for = min(float(retry_after), max_backoff)
+            except ValueError:
+                sleep_for = min(base_backoff * (2 ** attempt) + random.random(), max_backoff)
+        else:
+            sleep_for = min(base_backoff * (2 ** attempt) + random.random(), max_backoff)
+        time.sleep(sleep_for)
+
+    # Should not reach here, but be explicit
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("http_request_with_retry exited without response")
+
+
 def parse_samplesheet(filepath: str) -> list:
     """
     Parse a TSV samplesheet. Returns list of (sample_name, [file_paths]).
@@ -340,7 +438,8 @@ def parse_samplesheet(filepath: str) -> list:
     return samples
 
 
-def parse_metadata_file(filepath: str, sample_column: str, file_columns: list) -> list:
+def parse_metadata_file(filepath: str, sample_column: str, file_columns: list,
+                         paired_overrides: Optional[dict] = None) -> list:
     """
     Parse a CSV/TSV file containing sample names, file paths, and metadata.
 
@@ -348,10 +447,21 @@ def parse_metadata_file(filepath: str, sample_column: str, file_columns: list) -
         filepath: Path to the CSV or TSV file.
         sample_column: Name of the column containing the sample name.
         file_columns: List of column names containing file paths.
+        paired_overrides: Optional mapping from assay name (str) to a list of
+            column names to group under that assay. Used when column headers
+            do NOT contain a slash for auto-detection. Format:
+            {"ompA": ["fwd", "rev"], ...}
+
+    File columns can also be auto-grouped into logical assays by including a
+    slash in the column header (e.g. "ompA/forward_path"). The portion before
+    the slash becomes the assay name; the column name (full) becomes the file
+    role. The returned tuple includes the assay mapping per sample.
 
     Returns:
         List of (sample_name, [file_paths], {metadata_key: value, ...}).
         All columns except sample_column and file_columns are treated as metadata.
+        For paired/grouped files, file_paths is a dict {assay: [paths]} when
+        grouping is detected, else a flat list (backwards compatible).
     """
     # Detect delimiter: TSV if .tsv/.tab, CSV if .csv, otherwise sniff
     ext = Path(filepath).suffix.lower()
@@ -384,6 +494,10 @@ def parse_metadata_file(filepath: str, sample_column: str, file_columns: list) -
                     f"Available columns: {', '.join(reader.fieldnames)}"
                 )
 
+        # Determine grouping: any column containing "/" before the first "/"
+        # is treated as a logical assay group. Otherwise flat.
+        grouped = any("/" in c for c in file_columns) or bool(paired_overrides)
+
         # Metadata columns = everything except sample_column and file_columns
         metadata_columns = [
             c for c in reader.fieldnames
@@ -395,21 +509,56 @@ def parse_metadata_file(filepath: str, sample_column: str, file_columns: list) -
             if not sample_name:
                 continue
 
-            # Collect file paths (skip empty)
-            files = []
-            for fc in file_columns:
-                val = row.get(fc, "").strip()
-                if val:
-                    files.append(val)
-
-            # Collect metadata (skip empty values)
             metadata = {}
             for mc in metadata_columns:
                 val = row.get(mc, "").strip()
                 if val:
                     metadata[mc] = val
 
-            samples.append((sample_name, files, metadata))
+            if grouped:
+                files_by_assay = {}
+                # Apply explicit paired_overrides first
+                if paired_overrides:
+                    overridden_cols = set()
+                    for assay, cols in paired_overrides.items():
+                        paths = []
+                        for c in cols:
+                            overridden_cols.add(c)
+                            val = row.get(c, "").strip()
+                            if val:
+                                paths.append(val)
+                        if paths:
+                            files_by_assay[assay] = paths
+                    # Only add slash-prefixed columns to groups; skip the rest
+                    for fc in file_columns:
+                        if fc in overridden_cols:
+                            continue
+                        if "/" not in fc:
+                            continue
+                        val = row.get(fc, "").strip()
+                        if not val:
+                            continue
+                        assay, _role = fc.split("/", 1)
+                        files_by_assay.setdefault(assay, []).append(val)
+                else:
+                    # Slash-prefixed columns group; non-slash go to _ungrouped
+                    for fc in file_columns:
+                        val = row.get(fc, "").strip()
+                        if not val:
+                            continue
+                        if "/" in fc:
+                            assay, _role = fc.split("/", 1)
+                        else:
+                            assay = "_ungrouped"
+                        files_by_assay.setdefault(assay, []).append(val)
+                samples.append((sample_name, files_by_assay, metadata))
+            else:
+                files = []
+                for fc in file_columns:
+                    val = row.get(fc, "").strip()
+                    if val:
+                        files.append(val)
+                samples.append((sample_name, files, metadata))
 
     return samples
 
@@ -453,11 +602,44 @@ def auto_discover_samples(input_dir: Path) -> list:
     return result
 
 
-def upload_sample(client: IRIDANextClient, sample_name: str, file_paths: list,
-                  input_dir: Path, project_id: str = None, project_puid: str = None,
-                  description: str = None, metadata: dict = None) -> UploadResult:
-    """Upload a single sample: create sample → upload files → attach → update metadata."""
+def upload_sample(client: IRIDANextClient, sample_name: str,
+                  file_paths: Union[List[str], Dict[str, List[str]]],
+                  input_dir: Path, project_id: Optional[str] = None,
+                  project_puid: Optional[str] = None,
+                  description: Optional[str] = None,
+                  metadata: Optional[dict] = None,
+                  strict: bool = False) -> UploadResult:
+    """Upload a single sample: create sample → upload files → attach → update metadata.
+
+    Args:
+        file_paths: Either a list of path strings (legacy/ungrouped) or a dict
+            {assay: [paths]} (grouped via slash in column headers or --paired-files).
+        strict: If True, abort on the first missing file (raise). If False (default),
+            log a warning, skip that file, and continue. The row is marked failed
+            if any file is missing.
+    """
     result = UploadResult(sample_name=sample_name, success=False)
+
+    # Normalize file_paths to a flat list of (assay, path) tuples
+    flat = []
+    if isinstance(file_paths, dict):
+        for assay, paths in file_paths.items():
+            for p in paths:
+                flat.append((assay, p))
+    else:
+        for p in file_paths:
+            flat.append((None, p))
+
+    # Strict mode: validate all files exist BEFORE creating the sample,
+    # so we don't waste an API call on a doomed row.
+    if strict:
+        missing_pre = []
+        for _assay, rel_path in flat:
+            fp = input_dir / rel_path if not os.path.isabs(rel_path) else Path(rel_path)
+            if not fp.exists():
+                missing_pre.append(str(fp))
+        if missing_pre:
+            raise FileNotFoundError("; ".join(missing_pre))
 
     try:
         # 1. Create the sample
@@ -473,11 +655,12 @@ def upload_sample(client: IRIDANextClient, sample_name: str, file_paths: list,
 
         # 2. Upload each file via direct upload
         signed_blob_ids = []
-        for rel_path in file_paths:
+        missing = []
+        for assay, rel_path in flat:
             file_path = input_dir / rel_path if not os.path.isabs(rel_path) else Path(rel_path)
             if not file_path.exists():
-                result.message = f"File not found: {file_path}"
-                return result
+                missing.append(f"File not found: {file_path}")
+                continue
 
             # Determine content type
             ct = "application/octet-stream"
@@ -487,6 +670,14 @@ def upload_sample(client: IRIDANextClient, sample_name: str, file_paths: list,
             signed_id = client.upload_file(file_path, content_type=ct)
             signed_blob_ids.append(signed_id)
             result.files_uploaded.append(file_path.name)
+
+        if missing:
+            result.message = "; ".join(missing)
+            return result
+
+        if not signed_blob_ids:
+            result.message = "No files to upload (all columns empty)"
+            return result
 
         # 3. Attach files to sample
         attach_result = client.attach_files_to_sample(
@@ -536,8 +727,15 @@ Examples:
   # Attach files directly to a project (no samples)
   %(prog)s --url https://irida.example.com --email me@lab.ca --token INXT_PAT_xxx \\
       --project-puid INXT_PRJ_AAAAAAAAAA --attach-to-project --input-dir /data/reports
+
+  # Paired files with explicit assay grouping
+  %(prog)s --url https://irida.example.com --email me@lab.ca --token INXT_PAT_xxx \\
+      --project-puid INXT_PRJ_AAAAAAAAAA --metadata-file samples.csv \\
+      --sample-column sample_name --paired-files ompA:fwd_col,rev_col
         """,
     )
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
     parser.add_argument("--url", required=True, help="IRIDA Next base URL")
     parser.add_argument("--email", required=True, help="User email for authentication")
     parser.add_argument("--token", required=True, help="Personal Access Token")
@@ -550,7 +748,13 @@ Examples:
                         help="Column name in --metadata-file for the sample name (default: sample_name)")
     parser.add_argument("--file-columns", nargs="+", default=["file1", "file2"],
                         help="Column name(s) in --metadata-file for file paths (default: file1 file2). "
+                             "Column names containing '/' are auto-grouped into logical assays "
+                             "(e.g. 'ompA/forward_path' becomes assay 'ompA'). "
                              "All other columns become sample metadata.")
+    parser.add_argument("--paired-files", nargs="+", default=None, metavar="ASSAY:COL1,COL2[,...]",
+                        help="Explicit assay grouping when columns don't have '/' in their names. "
+                             "Format: --paired-files ompA:fwd,rev mlst:arcA,arcB. "
+                             "Implies grouping for parsing.")
     parser.add_argument("--input-dir", default=".", help="Base directory for file paths in samplesheet")
     parser.add_argument("--auto-discover", action="store_true",
                         help="Auto-discover paired-end FASTQ files in --input-dir")
@@ -560,6 +764,13 @@ Examples:
     parser.add_argument("--no-verify-ssl", action="store_true", help="Disable SSL verification")
     parser.add_argument("--workers", type=int, default=1,
                         help="Number of parallel upload workers (default: 1)")
+    parser.add_argument("--max-retries", type=int, default=3,
+                        help="Max retry attempts for HTTP 429 / 5xx / network errors (default: 3)")
+    parser.add_argument("--retry-backoff", type=float, default=1.0,
+                        help="Base backoff in seconds for retries; doubled with jitter each attempt (default: 1.0)")
+    parser.add_argument("--strict", action="store_true",
+                        help="Abort on the first missing file or row error. "
+                             "Default: log a warning and skip missing files, continue with remaining rows.")
     parser.add_argument("--dry-run", action="store_true",
                         help="List what would be uploaded without making changes")
     args = parser.parse_args()
@@ -570,8 +781,26 @@ Examples:
     if not args.samplesheet and not args.auto_discover and not args.attach_to_project and not args.metadata_file:
         parser.error("Either --samplesheet, --metadata-file, --auto-discover, or --attach-to-project is required")
 
+    # Parse --paired-files into a dict (assay -> [columns])
+    paired_overrides = None
+    if args.paired_files:
+        paired_overrides = {}
+        for spec in args.paired_files:
+            if ":" not in spec:
+                parser.error(f"--paired-files: expected ASSAY:COL1,COL2[,...] format, got '{spec}'")
+            assay, cols = spec.split(":", 1)
+            assay = assay.strip()
+            cols = [c.strip() for c in cols.split(",") if c.strip()]
+            if not assay or not cols:
+                parser.error(f"--paired-files: empty assay or columns in '{spec}'")
+            paired_overrides.setdefault(assay, []).extend(cols)
+
     verify_ssl = not args.no_verify_ssl
-    client = IRIDANextClient(args.url, args.email, args.token, verify_ssl)
+    client = IRIDANextClient(
+        args.url, args.email, args.token, verify_ssl,
+        max_retries=max(1, args.max_retries),
+        base_backoff=args.retry_backoff,
+    )
 
     # Verify connectivity
     print(f"Connecting to {args.url} ...")
@@ -585,23 +814,32 @@ Examples:
 
     # Build upload list
     metadata_map = {}  # sample_name → metadata dict
+    files_map = {}     # sample_name → file_paths (list or dict)
     if args.attach_to_project:
-        # Upload all files in input_dir to the project
         files = sorted(list(input_dir.glob("*.gz")) + list(input_dir.glob("*.fastq")))
         if not files:
             print(f"ERROR: No files found in {input_dir}")
             sys.exit(1)
-        upload_list = [(f.name, [str(f)]) for f in files]
+        for f in files:
+            files_map[f.name] = [str(f)]
+        upload_list = [(name, files_map[name]) for name in files_map]
     elif args.metadata_file:
-        # Parse metadata file: returns [(sample_name, [files], {metadata})]
-        parsed = parse_metadata_file(args.metadata_file, args.sample_column, args.file_columns)
-        upload_list = [(name, files) for name, files, meta in parsed]
+        # Parse metadata file: returns [(sample_name, files_or_grouped, {metadata})]
+        parsed = parse_metadata_file(args.metadata_file, args.sample_column,
+                                     args.file_columns, paired_overrides)
         for name, files, meta in parsed:
+            files_map[name] = files
             metadata_map[name] = meta
+        upload_list = [(name, files_map[name]) for name in files_map]
     elif args.auto_discover:
-        upload_list = auto_discover_samples(input_dir)
+        # auto_discover_samples returns list of (sample_name, [paths])
+        for name, paths in auto_discover_samples(input_dir):
+            files_map[name] = paths
+        upload_list = [(name, files_map[name]) for name in files_map]
     else:
-        upload_list = parse_samplesheet(args.samplesheet)
+        for name, paths in parse_samplesheet(args.samplesheet):
+            files_map[name] = paths
+        upload_list = [(name, files_map[name]) for name in files_map]
 
     if not upload_list:
         print("ERROR: No samples/files to upload. Check your samplesheet or input directory.")
@@ -611,7 +849,11 @@ Examples:
     for name, files in upload_list:
         meta = metadata_map.get(name, {})
         meta_str = f" [metadata: {', '.join(f'{k}={v}' for k,v in meta.items())}]" if meta else ""
-        print(f"  {name}: {', '.join(Path(f).name for f in files)}{meta_str}")
+        if isinstance(files, dict):
+            files_str = "; ".join(f"{k}=[{', '.join(Path(p).name for p in v)}]" for k, v in files.items())
+        else:
+            files_str = ", ".join(Path(p).name for p in files)
+        print(f"  {name}: {files_str}{meta_str}")
 
     if args.dry_run:
         print("\n--dry-run: no uploads performed.")
@@ -632,6 +874,7 @@ Examples:
                     upload_sample, client, sample_name, file_paths,
                     input_dir, args.project_id, args.project_puid, args.description,
                     meta if meta else None,
+                    args.strict,
                 )
                 futures[fut] = sample_name
             for fut in as_completed(futures):
@@ -648,6 +891,7 @@ Examples:
                 client, sample_name, file_paths, input_dir,
                 args.project_id, args.project_puid, args.description,
                 meta if meta else None,
+                args.strict,
             )
             results.append(r)
             status = "✓" if r.success else "✗"
@@ -658,7 +902,8 @@ Examples:
         print("\nAttaching files directly to project...")
         all_signed_ids = []
         for name, file_paths in upload_list:
-            for fp in file_paths:
+            flat = file_paths if isinstance(file_paths, list) else [p for paths in file_paths.values() for p in paths]
+            for fp in flat:
                 file_path = Path(fp)
                 if not file_path.exists():
                     print(f"  ✗ File not found: {file_path}")
