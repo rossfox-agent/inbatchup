@@ -64,7 +64,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 
 @dataclass
@@ -281,8 +281,8 @@ class IRIDANextClient:
     def get_project(self, project_id: str = None, project_puid: str = None) -> dict:
         """Fetch project details."""
         query = """
-        query GetProject($id: ID, $puid: ID) {
-            project(id: $id, puid: $puid) {
+        query GetProject($fullPath: ID, $puid: ID) {
+            project(fullPath: $fullPath, puid: $puid) {
                 id
                 puid
                 name
@@ -292,7 +292,7 @@ class IRIDANextClient:
         """
         variables = {}
         if project_id:
-            variables["id"] = project_id
+            variables["fullPath"] = project_id
         if project_puid:
             variables["puid"] = project_puid
         data = self.execute_graphql(query, variables)
